@@ -1,0 +1,38 @@
+html,
+body,
+#root {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    width: fit-content;
+    height: fit-content;
+    overflow: hidden;
+}
+
+.window {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    background: transparent;
+}
+
+.daemon-img {
+    width: 80px;
+    user-select: none;
+    -webkit-user-drag: none;
+}
+
+.drag-region {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 100px;
+    height: 100px;
+    cursor: grab;
+    user-select: none;
+    /*border: 2px solid blue;*/
+}
+
+.drag-region:active {
+    cursor: grabbing;
+}
