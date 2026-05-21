@@ -3,36 +3,242 @@ body,
 #root {
     margin: 0;
     padding: 0;
-    background: transparent;
-    width: fit-content;
-    height: fit-content;
+    width: 100%;
+    height: 100%;
     overflow: hidden;
+    background: transparent;
 }
 
-.window {
+body {
+    font-family: "Segoe UI", Inter, system-ui, sans-serif;
+}
+
+button {
+    font: inherit;
+}
+
+.daemon-container {
     display: inline-flex;
-    justify-content: center;
-    align-items: center;
+    box-sizing: border-box;
+    width: max-content;
+    height: max-content;
+    padding: 10px;
     background: transparent;
+}
+
+.daemon-container.is-hidden {
+    width: 1px;
+    height: 1px;
+    padding: 0;
+}
+
+.companion-shell {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    width: max-content;
+    height: max-content;
+    cursor: grab;
+    user-select: none;
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    transition:
+        opacity 220ms ease,
+        transform 220ms ease;
+}
+
+.companion-shell:active {
+    cursor: grabbing;
+}
+
+.phase-dismissed .companion-shell {
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(8px) scale(0.97);
+}
+
+.daemon-core {
+    position: relative;
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+    width: 80px;
+    height: 80px;
+    outline: none;
+}
+
+.daemon-core::after {
+    content: "";
+    position: absolute;
+    right: 4px;
+    bottom: 6px;
+    width: 9px;
+    height: 9px;
+    border: 1px solid rgba(10, 14, 18, 0.8);
+    border-radius: 999px;
+    background: #78d58a;
+    box-shadow: 0 0 12px rgba(120, 213, 138, 0.6);
+}
+
+.phase-speaking .daemon-core::after {
+    background: #f1c75b;
+    box-shadow: 0 0 12px rgba(241, 199, 91, 0.58);
+}
+
+.phase-waiting .daemon-core::after {
+    background: #6cc7e8;
+    box-shadow: 0 0 12px rgba(108, 199, 232, 0.58);
 }
 
 .daemon-img {
     width: 80px;
+    height: 80px;
+    object-fit: contain;
+    pointer-events: none;
     user-select: none;
     -webkit-user-drag: none;
 }
 
-.drag-region {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    width: 100px;
-    height: 100px;
-    cursor: grab;
-    user-select: none;
-    /*border: 2px solid blue;*/
+.ambient-line {
+    position: relative;
+    box-sizing: border-box;
+    width: max-content;
+    max-width: 260px;
+    margin-top: 7px;
+    padding: 10px 13px;
+    color: #f6f3ea;
+    font-size: 13px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+    white-space: normal;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 8px;
+    background: rgba(17, 20, 22, 0.82);
+    backdrop-filter: blur(18px);
+    animation: ambient-line 2.45s ease both;
 }
 
-.drag-region:active {
-    cursor: grabbing;
+.ambient-line::before,
+.interactive-card::before {
+    content: "";
+    position: absolute;
+    top: 18px;
+    left: -7px;
+    width: 12px;
+    height: 12px;
+    border-left: 1px solid rgba(255, 255, 255, 0.14);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+    background: inherit;
+    transform: rotate(45deg);
+}
+
+.interactive-card {
+    position: relative;
+    box-sizing: border-box;
+    width: 300px;
+    margin-top: 3px;
+    padding: 14px;
+    color: #f7f4eb;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    background: linear-gradient(
+        135deg,
+        rgba(25, 29, 31, 0.96),
+        rgba(12, 14, 15, 0.92)
+    );
+    backdrop-filter: blur(18px);
+    animation: card-in 180ms ease both;
+}
+
+.card-prompt {
+    margin: 0 28px 12px 0;
+    color: #f7f4eb;
+    font-size: 14px;
+    line-height: 1.35;
+}
+
+.choice-list {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 7px;
+}
+
+.choice-button,
+.dismiss-button {
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    color: #f7f4eb;
+    background: rgba(255, 255, 255, 0.07);
+}
+
+.choice-button {
+    min-width: 0;
+    min-height: 34px;
+    padding: 0 9px;
+    border-radius: 7px;
+    font-size: 12px;
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+        background 140ms ease,
+        border-color 140ms ease,
+        transform 140ms ease;
+}
+
+.choice-button:hover,
+.choice-button:focus-visible,
+.choice-button.is-selected {
+    border-color: rgba(108, 199, 232, 0.8);
+    background: rgba(108, 199, 232, 0.18);
+    transform: translateY(-1px);
+}
+
+.dismiss-button {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border-radius: 7px;
+    color: rgba(247, 244, 235, 0.76);
+    cursor: pointer;
+}
+
+.dismiss-button:hover,
+.dismiss-button:focus-visible {
+    border-color: rgba(241, 199, 91, 0.72);
+    background: rgba(241, 199, 91, 0.16);
+    color: #fffaf0;
+}
+
+@keyframes ambient-line {
+    0% {
+        opacity: 0;
+        transform: translateY(5px);
+    }
+
+    12%,
+    78% {
+        opacity: 1;
+        transform: translateY(0);
+    }
+
+    100% {
+        opacity: 0.94;
+        transform: translateY(0);
+    }
+}
+
+@keyframes card-in {
+    from {
+        opacity: 0;
+        transform: translateY(5px) scale(0.98);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
 }
