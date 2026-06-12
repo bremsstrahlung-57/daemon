@@ -6,6 +6,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import idleDaemon from "./assets/clippy.png";
@@ -15,50 +16,34 @@ import "./App.css";
 
 type CompanionPhase = "idle" | "speaking" | "waiting" | "dismissed";
 
-type Choice = {
-  id: string;
-  label: string;
-  response: string;
-};
+const PROMPT = "Ask Daemon";
+const SILENCE_MIN_MS = 18_000;
+const SILENCE_MAX_MS = 70_000;
+const SPEECH_VISIBLE_MS = 6_500;
+const PROMPT_CHANCE = 0.35;
+const PROMPT_IDLE_MS = 18_000;
 
-const AMBIENT_LINES = [
-  "I found a loose thread in the room.",
-  "Small check-in. Nothing dramatic.",
-  "Your desk has entered thoughtful weather.",
-];
-
-const PROMPT = "What should I keep an eye on next?";
-
-const CHOICES: Choice[] = [
-  {
-    id: "focus",
-    label: "Focus",
-    response: "Good. I will keep the edges quiet for a while.",
-  },
-  {
-    id: "remind",
-    label: "Remind me",
-    response: "Noted. I will bring it back when the moment feels less crowded.",
-  },
-  {
-    id: "ignore",
-    label: "Ignore",
-    response: "Understood. I will let this one drift away.",
-  },
-];
+const randomBetween = (min: number, max: number) =>
+  Math.floor(Math.random() * (max - min + 1)) + min;
 
 function App() {
   const canUseTauriWindow = "__TAURI_INTERNALS__" in window;
   const [phase, setPhase] = useState<CompanionPhase>("idle");
   const [isRendered, setIsRendered] = useState(true);
-  const [line, setLine] = useState(AMBIENT_LINES[0]);
+  const [line, setLine] = useState("");
   const [messageKey, setMessageKey] = useState(0);
-  const [selectedChoice, setSelectedChoice] = useState<string | null>(null);
+  const [prompt, setPrompt] = useState("");
+  const [isAsking, setIsAsking] = useState(false);
+  const [silenceTick, setSilenceTick] = useState(0);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const dragStartRef = useRef<{ x: number; y: number } | null>(null);
   const didDragRef = useRef(false);
-  const lineIndexRef = useRef(0);
+  const phaseRef = useRef(phase);
+  const isRenderedRef = useRef(isRendered);
+  const isAskingRef = useRef(isAsking);
+  const promptAfterSpeechRef = useRef(false);
+  const requestIdRef = useRef(0);
   const timersRef = useRef<number[]>([]);
 
   const clearTimers = useCallback(() => {
@@ -89,44 +74,121 @@ function App() {
       .catch(() => undefined);
   }, [canUseTauriWindow]);
 
+  const isWindowAvailable = useCallback(async () => {
+    if (!isRenderedRef.current) {
+      return false;
+    }
+
+    if (!canUseTauriWindow) {
+      return document.visibilityState === "visible";
+    }
+
+    try {
+      const currentWindow = getCurrentWindow();
+      const [isMinimized, isVisible] = await Promise.all([
+        currentWindow.isMinimized(),
+        currentWindow.isVisible(),
+      ]);
+
+      return isVisible && !isMinimized && isRenderedRef.current;
+    } catch {
+      return isRenderedRef.current;
+    }
+  }, [canUseTauriWindow]);
+
+  const showAiLine = useCallback((nextLine: string, canAskAfter = false) => {
+    const trimmedLine = nextLine.trim();
+    if (!trimmedLine) {
+      return;
+    }
+
+    promptAfterSpeechRef.current = canAskAfter;
+    setLine(trimmedLine);
+    setMessageKey((key) => key + 1);
+    setPhase("speaking");
+  }, []);
+
+  const queueSilenceRetry = useCallback(() => {
+    setTimer(
+      () => {
+        setSilenceTick((tick) => tick + 1);
+      },
+      randomBetween(SILENCE_MIN_MS, SILENCE_MAX_MS),
+    );
+  }, [setTimer]);
+
+  const generateSpontaneousLine = useCallback(async () => {
+    if (phaseRef.current !== "idle" || isAskingRef.current) {
+      return;
+    }
+
+    if (!(await isWindowAvailable())) {
+      queueSilenceRetry();
+      return;
+    }
+
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+
+    try {
+      const response = await invoke<string>("next_daemon_line");
+      if (
+        requestId === requestIdRef.current &&
+        phaseRef.current === "idle" &&
+        !isAskingRef.current &&
+        (await isWindowAvailable())
+      ) {
+        showAiLine(response, true);
+      }
+    } catch {
+      // Proactive lines should fail silently; direct asks surface errors.
+      queueSilenceRetry();
+    }
+  }, [isWindowAvailable, queueSilenceRetry, showAiLine]);
+
   const dismiss = useCallback(() => {
     clearTimers();
-    setPhase("idle");
-    setSelectedChoice(null);
+    requestIdRef.current += 1;
+    setIsAsking(false);
+    setPrompt("");
+    setLine("");
+    setPhase("dismissed");
+    setIsRendered(false);
   }, [clearTimers]);
 
   const beginConversation = useCallback(() => {
     clearTimers();
-
-    const nextLine = AMBIENT_LINES[lineIndexRef.current % AMBIENT_LINES.length];
-    lineIndexRef.current += 1;
+    requestIdRef.current += 1;
+    isRenderedRef.current = true;
 
     setIsRendered(true);
-    setSelectedChoice(null);
-    setLine(nextLine);
-    setMessageKey((key) => key + 1);
+    setLine("");
     setPhase("idle");
 
     setTimer(() => {
-      setPhase("speaking");
-      setMessageKey((key) => key + 1);
+      void generateSpontaneousLine();
     }, 220);
+  }, [clearTimers, generateSpontaneousLine, setTimer]);
 
-    setTimer(() => {
-      setPhase("waiting");
-    }, 2700);
-  }, [clearTimers, setTimer]);
+  const askDaemon = async () => {
+    const nextPrompt = prompt.trim();
+    if (!nextPrompt || isAsking) {
+      return;
+    }
 
-  const respondToChoice = (choice: Choice) => {
     clearTimers();
-    setSelectedChoice(choice.id);
-    setLine(choice.response);
-    setMessageKey((key) => key + 1);
-    setPhase("speaking");
+    requestIdRef.current += 1;
+    setIsAsking(true);
 
-    setTimer(() => {
-      setPhase("idle");
-    }, 2600);
+    try {
+      const response = await invoke<string>("ask_ai", { prompt: nextPrompt });
+      setPrompt("");
+      showAiLine(response, false);
+    } catch (error) {
+      showAiLine(error instanceof Error ? error.message : String(error), false);
+    } finally {
+      setIsAsking(false);
+    }
   };
 
   const handleMouseDown = (event: MouseEvent<HTMLElement>) => {
@@ -135,7 +197,10 @@ function App() {
     }
 
     const target = event.target;
-    if (target instanceof HTMLElement && target.closest("button")) {
+    if (
+      target instanceof HTMLElement &&
+      target.closest("button, input, textarea")
+    ) {
       return;
     }
 
@@ -193,17 +258,6 @@ function App() {
         : idleDaemon;
 
   useEffect(() => {
-    let timer: number;
-    if (phase === "idle") {
-      timer = window.setTimeout(() => {
-        setPhase("dismissed");
-        setTimer(() => setIsRendered(false), 260);
-      }, 10000);
-    }
-    return () => window.clearTimeout(timer);
-  }, [phase, setTimer]);
-
-  useEffect(() => {
     if (!containerRef.current || !canUseTauriWindow) {
       return;
     }
@@ -218,6 +272,61 @@ function App() {
     const frame = window.requestAnimationFrame(resizeToContent);
     return () => window.cancelAnimationFrame(frame);
   }, [isRendered, line, phase, resizeToContent]);
+
+  useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
+
+  useEffect(() => {
+    isRenderedRef.current = isRendered;
+  }, [isRendered]);
+
+  useEffect(() => {
+    isAskingRef.current = isAsking;
+  }, [isAsking]);
+
+  useEffect(() => {
+    if (phase !== "idle" || !isRendered || isAsking) {
+      return;
+    }
+
+    const timer = window.setTimeout(
+      () => {
+        void generateSpontaneousLine();
+      },
+      randomBetween(SILENCE_MIN_MS, SILENCE_MAX_MS),
+    );
+
+    return () => window.clearTimeout(timer);
+  }, [generateSpontaneousLine, isAsking, isRendered, phase, silenceTick]);
+
+  useEffect(() => {
+    if (phase !== "speaking") {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setPhase(
+        promptAfterSpeechRef.current && Math.random() < PROMPT_CHANCE
+          ? "waiting"
+          : "idle",
+      );
+    }, SPEECH_VISIBLE_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [phase]);
+
+  useEffect(() => {
+    if (phase !== "waiting" || isAsking) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setPhase("idle");
+    }, PROMPT_IDLE_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [isAsking, phase]);
 
   useEffect(() => {
     if (!canUseTauriWindow) {
@@ -277,34 +386,52 @@ function App() {
 
           {phase === "speaking" && (
             <div key={messageKey} className="ambient-line">
-              {line}
+              <p>{line}</p>
             </div>
           )}
 
           {phase === "waiting" && (
             <div className="interactive-card">
-              <button
-                type="button"
-                className="dismiss-button"
-                aria-label="Dismiss"
-                onClick={dismiss}
-              >
-                x
-              </button>
-              <p className="card-prompt">{PROMPT}</p>
-              <div className="choice-list">
-                {CHOICES.map((choice) => (
-                  <button
-                    key={choice.id}
-                    type="button"
-                    className={`choice-button ${
-                      selectedChoice === choice.id ? "is-selected" : ""
-                    }`}
-                    onClick={() => respondToChoice(choice)}
-                  >
-                    {choice.label}
-                  </button>
-                ))}
+              <div className="title-bar">
+                <div className="title-bar-text">Daemon</div>
+                <button
+                  type="button"
+                  className="title-bar-close"
+                  aria-label="Dismiss"
+                  onClick={dismiss}
+                >
+                  x
+                </button>
+              </div>
+              <div className="window-body">
+                <label className="card-prompt" htmlFor="daemon-prompt">
+                  {PROMPT}
+                </label>
+                <form
+                  className="prompt-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void askDaemon();
+                  }}
+                >
+                  <textarea
+                    id="daemon-prompt"
+                    className="prompt-input"
+                    value={prompt}
+                    rows={3}
+                    placeholder="What should I do next?"
+                    onChange={(event) => setPrompt(event.target.value)}
+                  />
+                  <div className="button-row">
+                    <button
+                      type="submit"
+                      className="ask-button"
+                      disabled={!prompt.trim() || isAsking}
+                    >
+                      {isAsking ? "Thinking" : "Ask"}
+                    </button>
+                  </div>
+                </form>
               </div>
             </div>
           )}

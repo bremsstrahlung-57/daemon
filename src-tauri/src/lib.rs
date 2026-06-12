@@ -4,6 +4,8 @@ use tauri::{
     Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
 };
 
+mod ai;
+
 const DAEMON_WINDOW: &str = "daemon";
 const TRIGGER_EVENT: &str = "daemon://trigger";
 const DISMISS_EVENT: &str = "daemon://dismiss";
@@ -20,6 +22,8 @@ fn emit_daemon_event(app: &tauri::AppHandle, event: &str) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    dotenvy::dotenv().ok();
+
     tauri::Builder::default()
         .setup(|app| {
             WebviewWindowBuilder::new(app, DAEMON_WINDOW, WebviewUrl::App("index.html".into()))
@@ -60,6 +64,7 @@ pub fn run() {
 
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![ai::ask_ai, ai::next_daemon_line])
         .run(tauri::generate_context!())
         .expect("error");
 }
