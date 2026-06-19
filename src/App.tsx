@@ -31,6 +31,7 @@ function App() {
   const [phase, setPhase] = useState<CompanionPhase>("idle");
   const [isRendered, setIsRendered] = useState(true);
   const [line, setLine] = useState("");
+  const [displayedLine, setDisplayedLine] = useState("");
   const [messageKey, setMessageKey] = useState(0);
   const [prompt, setPrompt] = useState("");
   const [isAsking, setIsAsking] = useState(false);
@@ -45,6 +46,8 @@ function App() {
   const promptAfterSpeechRef = useRef(false);
   const requestIdRef = useRef(0);
   const timersRef = useRef<number[]>([]);
+  const lastHeightRef = useRef<number | null>(null);
+  const lastWidthRef = useRef<number | null>(null);
 
   const clearTimers = useCallback(() => {
     timersRef.current.forEach((timer) => window.clearTimeout(timer));
@@ -60,7 +63,7 @@ function App() {
     timersRef.current.push(timer);
   }, []);
 
-  const resizeToContent = useCallback(() => {
+  const resizeToContent = useCallback(async () => {
     if (!containerRef.current || !canUseTauriWindow) {
       return;
     }
@@ -69,9 +72,33 @@ function App() {
     const width = Math.max(1, Math.ceil(rect.width));
     const height = Math.max(1, Math.ceil(rect.height));
 
-    void getCurrentWindow()
-      .setSize(new LogicalSize(width, height))
-      .catch(() => undefined);
+    try {
+      const win = getCurrentWindow();
+      let deltaH = 0;
+      let deltaW = 0;
+
+      if (lastHeightRef.current !== null) {
+        deltaH = height - lastHeightRef.current;
+      }
+      if (lastWidthRef.current !== null) {
+        deltaW = width - lastWidthRef.current;
+      }
+
+      if (deltaH !== 0 || deltaW !== 0) {
+        const pos = await win.outerPosition();
+        const factor = await win.scaleFactor();
+        pos.y -= Math.round(deltaH * factor);
+        pos.x -= Math.round(deltaW * factor);
+        await win.setPosition(pos);
+      }
+
+      lastHeightRef.current = height;
+      lastWidthRef.current = width;
+
+      await win.setSize(new LogicalSize(width, height));
+    } catch (e) {
+      // ignore
+    }
   }, [canUseTauriWindow]);
 
   const isWindowAvailable = useCallback(async () => {
@@ -96,17 +123,47 @@ function App() {
     }
   }, [canUseTauriWindow]);
 
-  const showAiLine = useCallback((nextLine: string, canAskAfter = false) => {
-    const trimmedLine = nextLine.trim();
-    if (!trimmedLine) {
-      return;
-    }
+  const showAiLine = useCallback(
+    async (nextLine: string, canAskAfter = false) => {
+      const trimmedLine = nextLine.trim();
+      if (!trimmedLine) {
+        return;
+      }
 
-    promptAfterSpeechRef.current = canAskAfter;
-    setLine(trimmedLine);
-    setMessageKey((key) => key + 1);
-    setPhase("speaking");
-  }, []);
+      if (canUseTauriWindow) {
+        try {
+          const SPEAK_W = 368; // 340 max bubble + 28 padding
+          const SPEAK_H = 366; // 232 max bubble + 18 gap + 88 daemon + 28 padding
+          const win = getCurrentWindow();
+          const [pos, factor, outerSize] = await Promise.all([
+            win.outerPosition(),
+            win.scaleFactor(),
+            win.outerSize(),
+          ]);
+          const currentW = outerSize.width / factor;
+          const currentH = outerSize.height / factor;
+          const deltaW = SPEAK_W - currentW;
+          const deltaH = SPEAK_H - currentH;
+          if (deltaW > 0 || deltaH > 0) {
+            pos.x -= Math.round(deltaW * factor);
+            pos.y -= Math.round(deltaH * factor);
+            await win.setPosition(pos);
+            await win.setSize(new LogicalSize(SPEAK_W, SPEAK_H));
+            lastWidthRef.current = SPEAK_W;
+            lastHeightRef.current = SPEAK_H;
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      promptAfterSpeechRef.current = canAskAfter;
+      setLine(trimmedLine);
+      setMessageKey((key) => key + 1);
+      setPhase("speaking");
+    },
+    [canUseTauriWindow],
+  );
 
   const queueSilenceRetry = useCallback(() => {
     setTimer(
@@ -138,7 +195,7 @@ function App() {
         !isAskingRef.current &&
         (await isWindowAvailable())
       ) {
-        showAiLine(response, true);
+        await showAiLine(response, true);
       }
     } catch {
       // Proactive lines should fail silently; direct asks surface errors.
@@ -152,6 +209,7 @@ function App() {
     setIsAsking(false);
     setPrompt("");
     setLine("");
+    setDisplayedLine("");
     setPhase("dismissed");
     setIsRendered(false);
   }, [clearTimers]);
@@ -163,6 +221,7 @@ function App() {
 
     setIsRendered(true);
     setLine("");
+    setDisplayedLine("");
     setPhase("idle");
 
     setTimer(() => {
@@ -183,9 +242,12 @@ function App() {
     try {
       const response = await invoke<string>("ask_ai", { prompt: nextPrompt });
       setPrompt("");
-      showAiLine(response, false);
+      await showAiLine(response, false);
     } catch (error) {
-      showAiLine(error instanceof Error ? error.message : String(error), false);
+      await showAiLine(
+        error instanceof Error ? error.message : String(error),
+        false,
+      );
     } finally {
       setIsAsking(false);
     }
@@ -271,7 +333,16 @@ function App() {
   useEffect(() => {
     const frame = window.requestAnimationFrame(resizeToContent);
     return () => window.cancelAnimationFrame(frame);
-  }, [isRendered, line, phase, resizeToContent]);
+  }, [isRendered, line, phase, displayedLine, resizeToContent]);
+
+  useEffect(() => {
+    if (phase === "speaking") {
+      const timer = setTimeout(() => {
+        void resizeToContent();
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [phase, displayedLine, resizeToContent]);
 
   useEffect(() => {
     phaseRef.current = phase;
@@ -301,9 +372,35 @@ function App() {
   }, [generateSpontaneousLine, isAsking, isRendered, phase, silenceTick]);
 
   useEffect(() => {
+    if (phase !== "speaking" || !line) {
+      setDisplayedLine("");
+      return;
+    }
+
+    const words = line.split(" ");
+    let currentWordIndex = 0;
+    setDisplayedLine(words[0] || "");
+
+    const interval = window.setInterval(() => {
+      currentWordIndex++;
+      if (currentWordIndex >= words.length) {
+        window.clearInterval(interval);
+      } else {
+        setDisplayedLine((prev) => prev + " " + words[currentWordIndex]);
+      }
+    }, 120);
+
+    return () => window.clearInterval(interval);
+  }, [line, phase]);
+
+  useEffect(() => {
     if (phase !== "speaking") {
       return;
     }
+
+    const wordsCount = line.split(" ").length;
+    const typingTime = wordsCount * 120;
+    const totalVisibleTime = Math.max(SPEECH_VISIBLE_MS, typingTime + 2000);
 
     const timer = window.setTimeout(() => {
       setPhase(
@@ -311,10 +408,10 @@ function App() {
           ? "waiting"
           : "idle",
       );
-    }, SPEECH_VISIBLE_MS);
+    }, totalVisibleTime);
 
     return () => window.clearTimeout(timer);
-  }, [phase]);
+  }, [line, phase]);
 
   useEffect(() => {
     if (phase !== "waiting" || isAsking) {
@@ -373,20 +470,10 @@ function App() {
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
         >
-          <div
-            aria-label="Daemon"
-            className="daemon-core"
-            role="button"
-            tabIndex={0}
-            onClick={handleDaemonClick}
-            onKeyDown={handleDaemonKeyDown}
-          >
-            <img src={daemonImage} alt="" className="daemon-img" />
-          </div>
-
           {phase === "speaking" && (
             <div key={messageKey} className="ambient-line">
-              <p>{line}</p>
+              <p style={{ visibility: "hidden", margin: 0 }}>{line}</p>
+              <p className="streaming-text">{displayedLine}</p>
             </div>
           )}
 
@@ -435,6 +522,17 @@ function App() {
               </div>
             </div>
           )}
+
+          <div
+            aria-label="Daemon"
+            className="daemon-core"
+            role="button"
+            tabIndex={0}
+            onClick={handleDaemonClick}
+            onKeyDown={handleDaemonKeyDown}
+          >
+            <img src={daemonImage} alt="" className="daemon-img" />
+          </div>
         </section>
       )}
     </main>

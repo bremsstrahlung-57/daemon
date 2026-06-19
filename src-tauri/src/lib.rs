@@ -33,8 +33,8 @@ pub fn run() {
                 .resizable(false)
                 .always_on_top(true)
                 .skip_taskbar(true)
-                .inner_size(100.0, 100.0)
-                .min_inner_size(1.0, 1.0)
+                // .inner_size(200.0, 200.0)
+                // .min_inner_size(1.0, 1.0)
                 .build()?;
 
             let summon = MenuItemBuilder::with_id("daemon_summon", "Summon daemon").build(app)?;
