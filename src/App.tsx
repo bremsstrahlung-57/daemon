@@ -16,18 +16,91 @@ import "./App.css";
 
 type CompanionPhase = "idle" | "speaking" | "waiting" | "dismissed";
 
+type WindowSize = {
+  width: number;
+  height: number;
+};
+
+type DragStart = {
+  x: number;
+  y: number;
+};
+
 const PROMPT = "Ask Daemon";
 const SILENCE_MIN_MS = 18_000;
 const SILENCE_MAX_MS = 70_000;
 const SPEECH_VISIBLE_MS = 6_500;
 const PROMPT_CHANCE = 0.35;
 const PROMPT_IDLE_MS = 18_000;
+const WORD_STREAM_MS = 120;
+const DRAG_THRESHOLD_PX = 5;
+const INITIAL_LINE_RESIZE_MS = 50;
+
+const SPEAKING_WINDOW: WindowSize = {
+  width: 368,
+  height: 392,
+};
 
 const randomBetween = (min: number, max: number) =>
   Math.floor(Math.random() * (max - min + 1)) + min;
 
+const canUseTauriWindow = () => "__TAURI_INTERNALS__" in window;
+
+function measureElement(element: HTMLElement): WindowSize {
+  const rect = element.getBoundingClientRect();
+
+  return {
+    width: Math.max(1, Math.ceil(rect.width), Math.ceil(element.scrollWidth)),
+    height: Math.max(
+      1,
+      Math.ceil(rect.height),
+      Math.ceil(element.scrollHeight),
+    ),
+  };
+}
+
+async function resizeWindowFromBottomRight(
+  nextSize: WindowSize,
+  previousSize: WindowSize | null,
+) {
+  const win = getCurrentWindow();
+
+  if (previousSize) {
+    const factor = await win.scaleFactor();
+    const pos = await win.outerPosition();
+    pos.x -= Math.round((nextSize.width - previousSize.width) * factor);
+    pos.y -= Math.round((nextSize.height - previousSize.height) * factor);
+    await win.setPosition(pos);
+  }
+
+  await win.setSize(new LogicalSize(nextSize.width, nextSize.height));
+}
+
+async function reserveSpeakingWindow(previousSize: WindowSize | null) {
+  if (!canUseTauriWindow()) {
+    return;
+  }
+
+  const win = getCurrentWindow();
+  const factor = await win.scaleFactor();
+  const outerSize = await win.outerSize();
+  const currentSize = previousSize ?? {
+    width: outerSize.width / factor,
+    height: outerSize.height / factor,
+  };
+
+  if (
+    currentSize.width >= SPEAKING_WINDOW.width &&
+    currentSize.height >= SPEAKING_WINDOW.height
+  ) {
+    return;
+  }
+
+  await resizeWindowFromBottomRight(SPEAKING_WINDOW, currentSize);
+}
+
 function App() {
-  const canUseTauriWindow = "__TAURI_INTERNALS__" in window;
+  const hasTauriWindow = canUseTauriWindow();
   const [phase, setPhase] = useState<CompanionPhase>("idle");
   const [isRendered, setIsRendered] = useState(true);
   const [line, setLine] = useState("");
@@ -38,7 +111,7 @@ function App() {
   const [silenceTick, setSilenceTick] = useState(0);
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const dragStartRef = useRef<{ x: number; y: number } | null>(null);
+  const dragStartRef = useRef<DragStart | null>(null);
   const didDragRef = useRef(false);
   const phaseRef = useRef(phase);
   const isRenderedRef = useRef(isRendered);
@@ -46,8 +119,7 @@ function App() {
   const promptAfterSpeechRef = useRef(false);
   const requestIdRef = useRef(0);
   const timersRef = useRef<number[]>([]);
-  const lastHeightRef = useRef<number | null>(null);
-  const lastWidthRef = useRef<number | null>(null);
+  const windowSizeRef = useRef<WindowSize | null>(null);
 
   const clearTimers = useCallback(() => {
     timersRef.current.forEach((timer) => window.clearTimeout(timer));
@@ -64,49 +136,34 @@ function App() {
   }, []);
 
   const resizeToContent = useCallback(async () => {
-    if (!containerRef.current || !canUseTauriWindow) {
+    if (!containerRef.current || !hasTauriWindow) {
       return;
     }
 
-    const rect = containerRef.current.getBoundingClientRect();
-    const width = Math.max(1, Math.ceil(rect.width));
-    const height = Math.max(1, Math.ceil(rect.height));
+    const nextSize = measureElement(containerRef.current);
 
     try {
-      const win = getCurrentWindow();
-      let deltaH = 0;
-      let deltaW = 0;
-
-      if (lastHeightRef.current !== null) {
-        deltaH = height - lastHeightRef.current;
-      }
-      if (lastWidthRef.current !== null) {
-        deltaW = width - lastWidthRef.current;
-      }
-
-      if (deltaH !== 0 || deltaW !== 0) {
-        const pos = await win.outerPosition();
-        const factor = await win.scaleFactor();
-        pos.y -= Math.round(deltaH * factor);
-        pos.x -= Math.round(deltaW * factor);
-        await win.setPosition(pos);
-      }
-
-      lastHeightRef.current = height;
-      lastWidthRef.current = width;
-
-      await win.setSize(new LogicalSize(width, height));
-    } catch (e) {
-      // ignore
+      await resizeWindowFromBottomRight(nextSize, windowSizeRef.current);
+      windowSizeRef.current = nextSize;
+    } catch (error) {
+      console.error("resize failed", error);
     }
-  }, [canUseTauriWindow]);
+  }, [hasTauriWindow]);
+
+  const resizeAfterPaint = useCallback(() => {
+    const frame = window.requestAnimationFrame(() => {
+      void resizeToContent();
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [resizeToContent]);
 
   const isWindowAvailable = useCallback(async () => {
     if (!isRenderedRef.current) {
       return false;
     }
 
-    if (!canUseTauriWindow) {
+    if (!hasTauriWindow) {
       return document.visibilityState === "visible";
     }
 
@@ -121,7 +178,7 @@ function App() {
     } catch {
       return isRenderedRef.current;
     }
-  }, [canUseTauriWindow]);
+  }, [hasTauriWindow]);
 
   const showAiLine = useCallback(
     async (nextLine: string, canAskAfter = false) => {
@@ -130,46 +187,25 @@ function App() {
         return;
       }
 
-      if (canUseTauriWindow) {
-        try {
-          const SPEAK_W = 368; // 340 max bubble + 28 padding
-          const SPEAK_H = 366; // 232 max bubble + 18 gap + 88 daemon + 28 padding
-          const win = getCurrentWindow();
-          const [pos, factor, outerSize] = await Promise.all([
-            win.outerPosition(),
-            win.scaleFactor(),
-            win.outerSize(),
-          ]);
-          const currentW = outerSize.width / factor;
-          const currentH = outerSize.height / factor;
-          const deltaW = SPEAK_W - currentW;
-          const deltaH = SPEAK_H - currentH;
-          if (deltaW > 0 || deltaH > 0) {
-            pos.x -= Math.round(deltaW * factor);
-            pos.y -= Math.round(deltaH * factor);
-            await win.setPosition(pos);
-            await win.setSize(new LogicalSize(SPEAK_W, SPEAK_H));
-            lastWidthRef.current = SPEAK_W;
-            lastHeightRef.current = SPEAK_H;
-          }
-        } catch {
-          // ignore
-        }
+      try {
+        await reserveSpeakingWindow(windowSizeRef.current);
+        windowSizeRef.current = SPEAKING_WINDOW;
+      } catch (error) {
+        console.error("reserve speaking window failed", error);
       }
 
       promptAfterSpeechRef.current = canAskAfter;
+      setDisplayedLine("");
       setLine(trimmedLine);
       setMessageKey((key) => key + 1);
       setPhase("speaking");
     },
-    [canUseTauriWindow],
+    [],
   );
 
   const queueSilenceRetry = useCallback(() => {
     setTimer(
-      () => {
-        setSilenceTick((tick) => tick + 1);
-      },
+      () => setSilenceTick((tick) => tick + 1),
       randomBetween(SILENCE_MIN_MS, SILENCE_MAX_MS),
     );
   }, [setTimer]);
@@ -189,16 +225,16 @@ function App() {
 
     try {
       const response = await invoke<string>("next_daemon_line");
-      if (
+      const canShowResponse =
         requestId === requestIdRef.current &&
         phaseRef.current === "idle" &&
         !isAskingRef.current &&
-        (await isWindowAvailable())
-      ) {
+        (await isWindowAvailable());
+
+      if (canShowResponse) {
         await showAiLine(response, true);
       }
     } catch {
-      // Proactive lines should fail silently; direct asks surface errors.
       queueSilenceRetry();
     }
   }, [isWindowAvailable, queueSilenceRetry, showAiLine]);
@@ -278,7 +314,7 @@ function App() {
     const deltaX = event.clientX - dragStartRef.current.x;
     const deltaY = event.clientY - dragStartRef.current.y;
 
-    if (Math.hypot(deltaX, deltaY) < 5 || !canUseTauriWindow) {
+    if (Math.hypot(deltaX, deltaY) < DRAG_THRESHOLD_PX || !hasTauriWindow) {
       return;
     }
 
@@ -320,28 +356,34 @@ function App() {
         : idleDaemon;
 
   useEffect(() => {
-    if (!containerRef.current || !canUseTauriWindow) {
+    if (!containerRef.current || !hasTauriWindow) {
       return;
     }
 
-    const observer = new ResizeObserver(() => resizeToContent());
+    const observer = new ResizeObserver(() => void resizeToContent());
     observer.observe(containerRef.current);
 
     return () => observer.disconnect();
-  }, [canUseTauriWindow, resizeToContent]);
+  }, [hasTauriWindow, resizeToContent]);
+
+  useEffect(resizeAfterPaint, [
+    isRendered,
+    line,
+    phase,
+    displayedLine,
+    resizeAfterPaint,
+  ]);
 
   useEffect(() => {
-    const frame = window.requestAnimationFrame(resizeToContent);
-    return () => window.cancelAnimationFrame(frame);
-  }, [isRendered, line, phase, displayedLine, resizeToContent]);
-
-  useEffect(() => {
-    if (phase === "speaking") {
-      const timer = setTimeout(() => {
-        void resizeToContent();
-      }, 50);
-      return () => clearTimeout(timer);
+    if (phase !== "speaking") {
+      return;
     }
+
+    const timer = window.setTimeout(() => {
+      void resizeToContent();
+    }, INITIAL_LINE_RESIZE_MS);
+
+    return () => window.clearTimeout(timer);
   }, [phase, displayedLine, resizeToContent]);
 
   useEffect(() => {
@@ -382,13 +424,15 @@ function App() {
     setDisplayedLine(words[0] || "");
 
     const interval = window.setInterval(() => {
-      currentWordIndex++;
+      currentWordIndex += 1;
+
       if (currentWordIndex >= words.length) {
         window.clearInterval(interval);
-      } else {
-        setDisplayedLine((prev) => prev + " " + words[currentWordIndex]);
+        return;
       }
-    }, 120);
+
+      setDisplayedLine((prev) => `${prev} ${words[currentWordIndex]}`);
+    }, WORD_STREAM_MS);
 
     return () => window.clearInterval(interval);
   }, [line, phase]);
@@ -398,8 +442,7 @@ function App() {
       return;
     }
 
-    const wordsCount = line.split(" ").length;
-    const typingTime = wordsCount * 120;
+    const typingTime = line.split(" ").length * WORD_STREAM_MS;
     const totalVisibleTime = Math.max(SPEECH_VISIBLE_MS, typingTime + 2000);
 
     const timer = window.setTimeout(() => {
@@ -426,7 +469,7 @@ function App() {
   }, [isAsking, phase]);
 
   useEffect(() => {
-    if (!canUseTauriWindow) {
+    if (!hasTauriWindow) {
       return;
     }
 
@@ -436,24 +479,26 @@ function App() {
     void listen("daemon://trigger", beginConversation).then((unlisten) => {
       if (disposed) {
         unlisten();
-      } else {
-        cleanups.push(unlisten);
+        return;
       }
+
+      cleanups.push(unlisten);
     });
 
     void listen("daemon://dismiss", dismiss).then((unlisten) => {
       if (disposed) {
         unlisten();
-      } else {
-        cleanups.push(unlisten);
+        return;
       }
+
+      cleanups.push(unlisten);
     });
 
     return () => {
       disposed = true;
       cleanups.forEach((cleanup) => cleanup());
     };
-  }, [beginConversation, canUseTauriWindow, dismiss]);
+  }, [beginConversation, dismiss, hasTauriWindow]);
 
   return (
     <main
@@ -471,10 +516,9 @@ function App() {
           onMouseLeave={handleMouseUp}
         >
           {phase === "speaking" && (
-            <div key={messageKey} className="ambient-line">
-              <p style={{ visibility: "hidden", margin: 0 }}>{line}</p>
-              <p className="streaming-text">{displayedLine}</p>
-            </div>
+            <p key={messageKey} className="ambient-line">
+              {displayedLine}
+            </p>
           )}
 
           {phase === "waiting" && (
