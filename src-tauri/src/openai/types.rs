@@ -45,6 +45,37 @@ pub struct ResponsesInputContent {
     pub text: String,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct ChatCompletionRequest {
+    pub model: String,
+    pub messages: Vec<ChatMessage>,
+    pub stream: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ChatCompletionChunk {
+    #[serde(default)]
+    pub choices: Vec<ChatCompletionChoice>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ChatCompletionChoice {
+    #[serde(default)]
+    pub delta: ChatCompletionDelta,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct ChatCompletionDelta {
+    #[serde(default)]
+    pub content: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ResponsesApiResponse {
     pub id: String,
@@ -68,21 +99,4 @@ pub struct ResponsesOutputContent {
     pub content_type: Option<String>,
     #[serde(default)]
     pub text: Option<String>,
-}
-
-impl ResponsesApiResponse {
-    pub fn text(&self) -> String {
-        if let Some(text) = self.output_text.as_deref() {
-            if !text.is_empty() {
-                return text.to_string();
-            }
-        }
-
-        self.output
-            .iter()
-            .flat_map(|item| item.content.iter())
-            .filter_map(|content| content.text.as_deref())
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
 }

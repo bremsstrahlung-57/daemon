@@ -25,15 +25,6 @@ pub struct MessageRecord {
 }
 
 #[derive(Clone, Debug, Serialize)]
-pub struct NoteRecord {
-    pub id: String,
-    pub content: String,
-    pub source_message_id: String,
-    pub created_at: i64,
-    pub deleted_at: Option<i64>,
-}
-
-#[derive(Clone, Debug, Serialize)]
 pub struct ProposalRecord {
     pub id: String,
     pub conversation_id: String,
@@ -60,6 +51,17 @@ pub struct JobRecord {
     pub completed_at: Option<i64>,
     pub result_json: Option<String>,
     pub error_message: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ProviderRecord {
+    pub id: String,
+    pub name: String,
+    pub base_url: String,
+    pub model: String,
+    pub is_active: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -146,6 +148,15 @@ impl Storage {
                  details_json TEXT,
                  created_at INTEGER NOT NULL
              );
+             CREATE TABLE IF NOT EXISTS providers (
+                 id TEXT PRIMARY KEY,
+                 name TEXT NOT NULL,
+                 base_url TEXT NOT NULL,
+                 model TEXT NOT NULL,
+                 is_active INTEGER NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL
+             );
              CREATE INDEX IF NOT EXISTS messages_conversation_idx ON messages(conversation_id, created_at);
              CREATE INDEX IF NOT EXISTS notes_source_idx ON notes(source_message_id, created_at);
              CREATE INDEX IF NOT EXISTS proposals_status_idx ON proposals(status, created_at);
@@ -192,50 +203,88 @@ impl Storage {
         Ok(record)
     }
 
-    pub fn active_notes_for_source(&self, source_message_id: &str) -> SqlResult<Vec<NoteRecord>> {
-        let mut statement = self.connection.prepare(
-            "SELECT id, content, source_message_id, created_at, deleted_at
-             FROM notes
-             WHERE source_message_id = ?1 AND deleted_at IS NULL
-             ORDER BY created_at ASC",
-        )?;
-        let rows = statement.query_map(params![source_message_id], |row| {
-            Ok(NoteRecord {
-                id: row.get(0)?,
-                content: row.get(1)?,
-                source_message_id: row.get(2)?,
-                created_at: row.get(3)?,
-                deleted_at: row.get(4)?,
-            })
-        })?;
-        rows.collect()
-    }
-
-    pub fn insert_note(
+    pub fn messages_for_conversation(
         &self,
-        content: &str,
-        source_message_id: &str,
-    ) -> SqlResult<NoteRecord> {
-        let record = NoteRecord {
-            id: new_id(),
-            content: content.to_string(),
-            source_message_id: source_message_id.to_string(),
-            created_at: now_ms(),
-            deleted_at: None,
-        };
-        self.connection.execute(
-            "INSERT INTO notes (id, content, source_message_id, created_at, deleted_at) VALUES (?1, ?2, ?3, ?4, NULL)",
-            params![record.id, record.content, record.source_message_id, record.created_at],
+        conversation_id: &str,
+    ) -> SqlResult<Vec<MessageRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, conversation_id, role, content, created_at FROM messages
+             WHERE conversation_id = ?1 ORDER BY created_at ASC",
         )?;
-        Ok(record)
+        let messages = statement
+            .query_map(params![conversation_id], |row| {
+                Ok(MessageRecord {
+                    id: row.get(0)?,
+                    conversation_id: row.get(1)?,
+                    role: row.get(2)?,
+                    content: row.get(3)?,
+                    created_at: row.get(4)?,
+                })
+            })?
+            .collect();
+        messages
     }
 
-    pub fn soft_delete_note(&self, note_id: &str) -> SqlResult<bool> {
-        let changed = self.connection.execute(
-            "UPDATE notes SET deleted_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
-            params![now_ms(), note_id],
+    pub fn providers(&self) -> SqlResult<Vec<ProviderRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, name, base_url, model, is_active, created_at, updated_at
+             FROM providers ORDER BY is_active DESC, updated_at DESC",
         )?;
-        Ok(changed == 1)
+        let providers = statement.query_map([], provider_from_row)?.collect();
+        providers
+    }
+
+    pub fn active_provider(&self) -> SqlResult<Option<ProviderRecord>> {
+        self.connection
+            .query_row(
+                "SELECT id, name, base_url, model, is_active, created_at, updated_at
+                 FROM providers WHERE is_active = 1 LIMIT 1",
+                [],
+                provider_from_row,
+            )
+            .optional()
+    }
+
+    pub fn save_provider(&mut self, provider: &ProviderRecord) -> SqlResult<ProviderRecord> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if provider.is_active {
+            transaction.execute("UPDATE providers SET is_active = 0", [])?;
+        }
+        transaction.execute(
+            "INSERT INTO providers (id, name, base_url, model, is_active, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(id) DO UPDATE SET name = excluded.name, base_url = excluded.base_url,
+                model = excluded.model, is_active = excluded.is_active, updated_at = excluded.updated_at",
+            params![provider.id, provider.name, provider.base_url, provider.model, provider.is_active as i64, provider.created_at, provider.updated_at],
+        )?;
+        transaction.commit()?;
+        Ok(provider.clone())
+    }
+
+    pub fn set_active_provider(&mut self, provider_id: &str) -> SqlResult<ProviderRecord> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        transaction.execute("UPDATE providers SET is_active = 0", [])?;
+        if transaction.execute(
+            "UPDATE providers SET is_active = 1, updated_at = ?2 WHERE id = ?1",
+            params![provider_id, now_ms()],
+        )? != 1 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+        let provider = transaction.query_row(
+            "SELECT id, name, base_url, model, is_active, created_at, updated_at FROM providers WHERE id = ?1",
+            params![provider_id],
+            provider_from_row,
+        )?;
+        transaction.commit()?;
+        Ok(provider)
+    }
+
+    pub fn delete_provider(&self, provider_id: &str) -> SqlResult<bool> {
+        Ok(self.connection.execute("DELETE FROM providers WHERE id = ?1", params![provider_id])? == 1)
     }
 
     pub fn insert_proposal(&self, proposal: &ProposalRecord) -> SqlResult<()> {
@@ -541,5 +590,17 @@ fn job_from_row(row: &rusqlite::Row<'_>) -> SqlResult<JobRecord> {
         completed_at: row.get(6)?,
         result_json: row.get(7)?,
         error_message: row.get(8)?,
+    })
+}
+
+fn provider_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ProviderRecord> {
+    Ok(ProviderRecord {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        base_url: row.get(2)?,
+        model: row.get(3)?,
+        is_active: row.get::<_, i64>(4)? != 0,
+        created_at: row.get(5)?,
+        updated_at: row.get(6)?,
     })
 }

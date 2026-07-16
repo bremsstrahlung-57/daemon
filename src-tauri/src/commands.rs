@@ -6,11 +6,12 @@ use crate::{
         deny_proposal as resolve_denial, pending_proposals as load_pending_proposals,
         CreateRunCodexProposalRequest, ProposalApproval, ResolveProposalRequest,
     },
+    providers::{self, ProviderIdRequest, ProviderView, SaveProviderRequest},
     state::AppState,
     tools::{DescribeRepoRequest, ProposedToolCall, RepositoryMetadata, ValidatedToolCall},
 };
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{menu::{ContextMenu, Menu, MenuItemBuilder}, AppHandle, State, Window};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct AuthStatus {
@@ -34,6 +35,49 @@ pub fn get_auth_status(state: State<'_, AppState>) -> AuthStatus {
 pub fn disconnect_api_key(state: State<'_, AppState>) -> Result<AuthStatus, String> {
     state.secrets.delete_api_key()?;
     Ok(AuthStatus { configured: false })
+}
+
+#[tauri::command]
+pub fn show_toolbox_menu(app: AppHandle, window: Window) -> Result<(), String> {
+    let providers = MenuItemBuilder::with_id("daemon_toolbox_providers", "AI Providers").build(&app)
+        .map_err(|_| "Unable to open the toolbox".to_string())?;
+    let keys = MenuItemBuilder::with_id("daemon_toolbox_keys", "API Keys").build(&app)
+        .map_err(|_| "Unable to open the toolbox".to_string())?;
+    let models = MenuItemBuilder::with_id("daemon_toolbox_models", "Models").build(&app)
+        .map_err(|_| "Unable to open the toolbox".to_string())?;
+    let settings = MenuItemBuilder::with_id("daemon_toolbox_settings", "Settings").build(&app)
+        .map_err(|_| "Unable to open the toolbox".to_string())?;
+    let about = MenuItemBuilder::with_id("daemon_toolbox_about", "About").build(&app)
+        .map_err(|_| "Unable to open the toolbox".to_string())?;
+    let menu = Menu::with_items(&app, &[&providers, &keys, &models, &settings, &about])
+        .map_err(|_| "Unable to open the toolbox".to_string())?;
+    menu.popup(window)
+        .map_err(|_| "Unable to open the toolbox".to_string())
+}
+
+#[tauri::command]
+pub fn list_providers(state: State<'_, AppState>) -> Result<Vec<ProviderView>, String> {
+    providers::providers(&state)
+}
+
+#[tauri::command]
+pub fn save_provider(state: State<'_, AppState>, request: SaveProviderRequest) -> Result<ProviderView, String> {
+    providers::save_provider(&state, request)
+}
+
+#[tauri::command]
+pub fn select_provider(state: State<'_, AppState>, request: ProviderIdRequest) -> Result<ProviderView, String> {
+    providers::select_provider(&state, request)
+}
+
+#[tauri::command]
+pub fn delete_provider_key(state: State<'_, AppState>, request: ProviderIdRequest) -> Result<(), String> {
+    providers::delete_provider_key(&state, request)
+}
+
+#[tauri::command]
+pub fn delete_provider(state: State<'_, AppState>, request: ProviderIdRequest) -> Result<bool, String> {
+    providers::delete_provider(&state, request)
 }
 
 #[tauri::command]
@@ -105,32 +149,4 @@ pub async fn submit_conversation_turn(
     request: crate::openai::turns::SubmitTurnRequest,
 ) -> Result<crate::openai::turns::TurnResult, String> {
     submit_turn(app, state, request).await
-}
-
-#[derive(Clone, serde::Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct NoteIdRequest {
-    pub note_id: String,
-}
-
-#[tauri::command]
-pub fn undo_note(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    request: NoteIdRequest,
-) -> Result<bool, String> {
-    let storage = state
-        .storage
-        .lock()
-        .map_err(|_| "Local storage is unavailable".to_string())?;
-    let changed = storage
-        .soft_delete_note(&request.note_id)
-        .map_err(|_| "Unable to undo the local note".to_string())?;
-    if changed {
-        storage
-            .append_audit("note", &request.note_id, "undone", None)
-            .map_err(|_| "Unable to write the note audit".to_string())?;
-        let _ = app.emit(crate::events::NOTE_UNDONE, &request);
-    }
-    Ok(changed)
 }

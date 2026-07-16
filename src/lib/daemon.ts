@@ -3,7 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 export type SubmitTurnRequest = {
   content: string;
   conversationId?: string;
-  fixtureId?: string;
 };
 
 export type NoteRecord = {
@@ -24,7 +23,26 @@ export type TurnResult = {
   user_message_id: string;
   assistant_message_id: string;
   assistant_text: string;
-  notes: NoteReceipt[];
+};
+
+export type Provider = {
+  id: string;
+  name: string;
+  base_url: string;
+  model: string;
+  is_active: boolean;
+  created_at: number;
+  updated_at: number;
+  api_key_configured: boolean;
+};
+
+export type SaveProviderRequest = {
+  id?: string;
+  name: string;
+  baseUrl: string;
+  model: string;
+  apiKey?: string;
+  makeActive?: boolean;
 };
 
 export type MessageReadyPayload = {
@@ -70,9 +88,33 @@ export const submitConversationTurn = (request: SubmitTurnRequest) =>
     request: {
       content: request.content,
       conversation_id: request.conversationId,
-      fixture_id: request.fixtureId,
     },
   });
+
+export const listProviders = () => invoke<Provider[]>("list_providers");
+
+export const saveProvider = (request: SaveProviderRequest) =>
+  invoke<Provider>("save_provider", {
+    request: {
+      id: request.id,
+      name: request.name,
+      base_url: request.baseUrl,
+      model: request.model,
+      api_key: request.apiKey,
+      make_active: request.makeActive ?? true,
+    },
+  });
+
+export const selectProvider = (providerId: string) =>
+  invoke<Provider>("select_provider", { request: { provider_id: providerId } });
+
+export const deleteProviderKey = (providerId: string) =>
+  invoke<void>("delete_provider_key", { request: { provider_id: providerId } });
+
+export const deleteProvider = (providerId: string) =>
+  invoke<boolean>("delete_provider", { request: { provider_id: providerId } });
+
+export const showToolboxMenu = () => invoke<void>("show_toolbox_menu");
 
 export const undoNote = (noteId: string) =>
   invoke<boolean>("undo_note", { request: { note_id: noteId } });

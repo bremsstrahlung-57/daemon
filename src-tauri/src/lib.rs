@@ -3,6 +3,7 @@ mod events;
 mod jobs;
 mod openai;
 mod proposals;
+mod providers;
 mod secrets;
 mod state;
 mod storage;
@@ -83,10 +84,29 @@ pub fn run() {
 
             Ok(())
         })
+        .on_menu_event(|app, event| {
+            let section = match event.id().as_ref() {
+                "daemon_toolbox_providers" => Some("providers"),
+                "daemon_toolbox_keys" => Some("keys"),
+                "daemon_toolbox_models" => Some("models"),
+                "daemon_toolbox_settings" => Some("settings"),
+                "daemon_toolbox_about" => Some("about"),
+                _ => None,
+            };
+            if let Some(section) = section {
+                let _ = app.emit_to(DAEMON_WINDOW, events::TOOLBOX_OPEN, section);
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::save_api_key,
             commands::get_auth_status,
             commands::disconnect_api_key,
+            commands::show_toolbox_menu,
+            commands::list_providers,
+            commands::save_provider,
+            commands::select_provider,
+            commands::delete_provider_key,
+            commands::delete_provider,
             commands::create_model_response,
             commands::validate_tool_call,
             commands::describe_repo,
@@ -95,7 +115,6 @@ pub fn run() {
             commands::deny_proposal,
             commands::pending_proposals,
             commands::submit_conversation_turn,
-            commands::undo_note,
         ])
         .run(tauri::generate_context!())
         .expect("error");

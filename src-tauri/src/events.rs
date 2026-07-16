@@ -1,9 +1,9 @@
 pub const TURN_STARTED: &str = "daemon://turn-started";
+pub const MESSAGE_DELTA: &str = "daemon://message-delta";
 pub const MESSAGE_READY: &str = "daemon://message-ready";
-pub const NOTE_CREATED: &str = "daemon://note-created";
-pub const NOTE_UNDONE: &str = "daemon://note-undone";
 pub const PROPOSAL_CREATED: &str = "daemon://proposal-created";
 pub const PROPOSAL_RESOLVED: &str = "daemon://proposal-resolved";
 pub const JOB_STARTED: &str = "daemon://job-started";
 pub const JOB_COMPLETED: &str = "daemon://job-completed";
 pub const JOB_FAILED: &str = "daemon://job-failed";
+pub const TOOLBOX_OPEN: &str = "daemon://toolbox-open";

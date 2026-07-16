@@ -11,6 +11,7 @@ export type ProposalResolvedPayload = {
 };
 
 export type JobLifecyclePayload = { job: JobRecord };
+export type MessageDeltaPayload = { conversation_id: string; content: string };
 
 export const onMessageReady = (
   handler: (payload: MessageReadyPayload) => void,
@@ -18,6 +19,12 @@ export const onMessageReady = (
   listen<MessageReadyPayload>("daemon://message-ready", (event) => {
     handler(event.payload);
   });
+
+export const onMessageDelta = (
+  handler: (payload: MessageDeltaPayload) => void,
+): Promise<UnlistenFn> => listen<MessageDeltaPayload>("daemon://message-delta", (event) => {
+  handler(event.payload);
+});
 
 export const onProposalCreated = (
   handler: (payload: ProposalCreatedPayload) => void,

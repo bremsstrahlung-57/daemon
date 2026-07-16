@@ -1,9 +1,9 @@
 mod types;
 pub mod turns;
 
-pub use types::{ModelTurnRequest, ResponsesApiResponse, ResponsesRequest, TurnMessage, TurnRole};
+pub use types::{ChatCompletionChunk, ChatCompletionRequest, ChatMessage, ModelTurnRequest, ResponsesApiResponse, ResponsesRequest, TurnMessage, TurnRole};
 
-use crate::secrets::SecretStore;
+use crate::{secrets::SecretStore, storage::ProviderRecord};
 use reqwest::Client;
 
 const RESPONSES_ENDPOINT: &str = "https://api.openai.com/v1/responses";
@@ -64,6 +64,71 @@ impl OpenAiClient {
             .json::<ResponsesApiResponse>()
             .await
             .map_err(|_| "The OpenAI response was not understood".to_string())
+    }
+
+    pub async fn stream_chat<F>(
+        &self,
+        provider: &ProviderRecord,
+        messages: Vec<ChatMessage>,
+        mut on_delta: F,
+    ) -> Result<String, String>
+    where
+        F: FnMut(&str),
+    {
+        if messages.is_empty() {
+            return Err("A conversation requires at least one message".to_string());
+        }
+        let endpoint = format!("{}/chat/completions", provider.base_url.trim_end_matches('/'));
+        let request = self.http.post(endpoint).json(&ChatCompletionRequest {
+            model: provider.model.clone(),
+            messages,
+            stream: true,
+        });
+        let request = match self.secrets.load_provider_api_key(&provider.id) {
+            Ok(api_key) => request.bearer_auth(api_key),
+            Err(_) => request,
+        };
+        let mut response = request
+            .send()
+            .await
+            .map_err(|_| "The selected AI provider could not be reached".to_string())?;
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("The selected AI provider returned {status}: {}", body.chars().take(240).collect::<String>()));
+        }
+        let mut pending = String::new();
+        let mut output = String::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|_| "The AI provider stream ended unexpectedly".to_string())?
+        {
+            pending.push_str(&String::from_utf8_lossy(&chunk));
+            while let Some(end) = pending.find("\n\n") {
+                let event = pending[..end].to_string();
+                pending.drain(..end + 2);
+                let Some(data) = event.lines().find_map(|line| line.strip_prefix("data:")) else {
+                    continue;
+                };
+                let data = data.trim();
+                if data == "[DONE]" {
+                    continue;
+                }
+                let chunk: ChatCompletionChunk = serde_json::from_str(data)
+                    .map_err(|_| "The selected AI provider sent an invalid streaming response".to_string())?;
+                for choice in chunk.choices {
+                    if let Some(delta) = choice.delta.content {
+                        on_delta(&delta);
+                        output.push_str(&delta);
+                    }
+                }
+            }
+        }
+        if output.trim().is_empty() {
+            return Err("The selected AI provider returned an empty response".to_string());
+        }
+        Ok(output)
     }
 }
 

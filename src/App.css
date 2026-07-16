@@ -322,6 +322,72 @@ button {
     opacity: 0.58;
 }
 
+.toolbox-card {
+    box-sizing: border-box;
+    width: 280px;
+    padding: 12px;
+    color: #f5edff;
+    border: 1px solid rgba(215, 180, 255, 0.38);
+    border-radius: 6px;
+    background: linear-gradient(135deg, rgba(75, 40, 119, 0.68), rgba(25, 12, 51, 0.52));
+    box-shadow: 0 14px 36px rgba(19, 4, 36, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+    backdrop-filter: blur(20px) saturate(145%);
+}
+
+.toolbox-card header,
+.provider-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.provider-row > span {
+    display: flex;
+    gap: 4px;
+}
+
+.toolbox-card a {
+    color: #e4c7ff;
+    font-size: 11px;
+}
+
+.toolbox-card header span {
+    text-transform: uppercase;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+}
+
+.toolbox-card button,
+.provider-form input {
+    min-width: 0;
+    padding: 7px;
+    color: inherit;
+    border: 1px solid rgba(215, 180, 255, 0.28);
+    border-radius: 3px;
+    background: rgba(30, 12, 55, 0.35);
+    font: inherit;
+}
+
+.provider-list,
+.provider-form {
+    display: grid;
+    gap: 6px;
+    margin-top: 12px;
+}
+
+.provider-row button:first-child {
+    overflow: hidden;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.toolbox-message {
+    margin: 10px 0 0;
+    font-size: 11px;
+}
+
 .choice-button,
 .dismiss-button {
     border: 1px solid rgba(255, 255, 255, 0.14);

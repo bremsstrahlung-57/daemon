@@ -9,24 +9,15 @@ import {
 } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
-import ConfirmationCard from "./components/ConfirmationCard";
 import Mascot from "./components/Mascot";
+import ProviderToolbox, { type ToolboxSection } from "./components/ProviderToolbox";
 import {
-  approveProposal,
-  denyProposal,
-  pendingProposals,
+  showToolboxMenu,
   submitConversationTurn,
-  undoNote,
-  type NoteReceipt,
-  type ProposalRecord,
 } from "./lib/daemon";
 import {
   onMessageReady,
-  onJobCompleted,
-  onJobFailed,
-  onJobStarted,
-  onProposalCreated,
-  onProposalResolved,
+  onMessageDelta,
 } from "./lib/events";
 import "./App.css";
 
@@ -41,8 +32,30 @@ type CompanionPhase =
   | "dismissed";
 
 const PROMPT = "I’m here. What’s been on your mind?";
-const visibleDuration = (text: string) => (text.length / 15) * 1000;
+const visibleDuration = (text: string) => {
+  if (text.length < 20) {
+    return 3_000;
+  }
+
+  if (text.length < 50) {
+    return 7_000;
+  }
+
+  return 20_000;
+};
 const PROMPT_VISIBLE_MS = 10_000;
+
+const invocationErrorMessage = (error: unknown) => {
+  if (typeof error === "string") {
+    return error;
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return "I couldn’t reach the selected AI provider.";
+};
 
 function App() {
   const canUseTauriWindow = "__TAURI_INTERNALS__" in window;
@@ -52,12 +65,9 @@ function App() {
   const [messageKey, setMessageKey] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [input, setInput] = useState("");
-  const [fixtureMode, setFixtureMode] = useState(false);
   const [conversationId, setConversationId] = useState<string | undefined>();
-  const [receipt, setReceipt] = useState<NoteReceipt | null>(null);
-  const [proposal, setProposal] = useState<ProposalRecord | null>(null);
-  const [isResolvingProposal, setIsResolvingProposal] = useState(false);
-  const [isJobRunning, setIsJobRunning] = useState(false);
+  const [isJobRunning] = useState(false);
+  const [toolboxSection, setToolboxSection] = useState<ToolboxSection | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const dragStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -124,24 +134,20 @@ function App() {
 
     clearTimers();
     setPhase("listening");
+    setLine("");
     setInput("");
     try {
       const result = await submitConversationTurn({
         content,
         conversationId,
-        fixtureId: fixtureMode ? "rehearsal-and-login-bug" : undefined,
       });
       setConversationId(result.conversation_id);
-      const nextReceipt = result.notes[0];
-      if (nextReceipt) {
-        setReceipt(nextReceipt);
-        setTimer(() => setReceipt(null), 6000);
-      }
-    } catch {
-      setLine("I couldn’t save that locally.");
+    } catch (error) {
+      const message = invocationErrorMessage(error);
+      setLine(message);
       setMessageKey((key) => key + 1);
       setPhase("speaking");
-      setTimer(() => setPhase("idle"), visibleDuration("I couldn’t save that locally."));
+      setTimer(() => setPhase("idle"), visibleDuration(message));
     }
   };
 
@@ -156,97 +162,10 @@ function App() {
     [clearTimers, setTimer],
   );
 
-  const handleUndo = async () => {
-    if (!receipt) {
-      return;
-    }
-    await undoNote(receipt.note.id);
-    setReceipt(null);
-  };
-
-  const refreshPendingProposals = useCallback(async () => {
-    if (!canUseTauriWindow) {
-      return;
-    }
-    try {
-      const pending = await pendingProposals();
-      setProposal(pending[0] ?? null);
-    } catch {
-      setProposal(null);
-    }
-  }, [canUseTauriWindow]);
-
-  const handleProposalApprove = async () => {
-    if (!proposal) {
-      return;
-    }
-    setIsResolvingProposal(true);
-    try {
-      await approveProposal(proposal);
-      setProposal(null);
-      setLine("Preparing the isolated task.");
-      setMessageKey((key) => key + 1);
-      setPhase("speaking");
-      setTimer(() => setPhase("idle"), visibleDuration("Preparing the isolated task."));
-    } catch {
-      setLine("I couldn’t record that approval.");
-      setMessageKey((key) => key + 1);
-      setPhase("speaking");
-      setTimer(() => setPhase("idle"), visibleDuration("I couldn’t record that approval."));
-    } finally {
-      setIsResolvingProposal(false);
-    }
-  };
-
-  const handleProposalDeny = async () => {
-    if (!proposal) {
-      return;
-    }
-    setIsResolvingProposal(true);
-    try {
-      await denyProposal(proposal);
-      setProposal(null);
-      setLine("Okay. I won’t touch it.");
-      setMessageKey((key) => key + 1);
-      setPhase("speaking");
-      setTimer(() => setPhase("idle"), visibleDuration("Okay. I won’t touch it."));
-    } catch {
-      setLine("I couldn’t record that decision.");
-      setMessageKey((key) => key + 1);
-      setPhase("speaking");
-      setTimer(() => setPhase("idle"), visibleDuration("I couldn’t record that decision."));
-    } finally {
-      setIsResolvingProposal(false);
-    }
-  };
-
-  const handleJobStarted = useCallback(() => {
-    setIsJobRunning(true);
+  const handleMessageDelta = useCallback((payload: { content: string }) => {
+    setLine((current) => current + payload.content);
+    setPhase("speaking");
   }, []);
-
-  const handleJobCompleted = useCallback(() => {
-    clearTimers();
-    setIsJobRunning(false);
-    setLine("The isolated task completed.");
-    setMessageKey((key) => key + 1);
-    setPhase("completed");
-    setTimer(() => {
-      setPhase("speaking");
-      setTimer(() => setPhase("idle"), visibleDuration("The isolated task completed."));
-    }, 1200);
-  }, [clearTimers, setTimer]);
-
-  const handleJobFailed = useCallback(() => {
-    clearTimers();
-    setIsJobRunning(false);
-    setLine("The isolated task couldn’t complete.");
-    setMessageKey((key) => key + 1);
-    setPhase("failed");
-    setTimer(() => {
-      setPhase("speaking");
-      setTimer(() => setPhase("idle"), visibleDuration("The isolated task couldn’t complete."));
-    }, 1200);
-  }, [clearTimers, setTimer]);
 
   const handleMouseDown = (event: MouseEvent<HTMLElement>) => {
     if (event.button !== 0) {
@@ -331,10 +250,6 @@ function App() {
   }, [isRendered, line, phase, resizeToContent]);
 
   useEffect(() => {
-    void refreshPendingProposals();
-  }, [refreshPendingProposals]);
-
-  useEffect(() => {
     if (!canUseTauriWindow) {
       return;
     }
@@ -366,9 +281,7 @@ function App() {
       }
     });
 
-    void onProposalCreated(() => {
-      void refreshPendingProposals();
-    }).then((unlisten) => {
+    void onMessageDelta(handleMessageDelta).then((unlisten) => {
       if (disposed) {
         unlisten();
       } else {
@@ -376,39 +289,9 @@ function App() {
       }
     });
 
-    void onProposalResolved(() => {
-      void refreshPendingProposals();
-    }).then((unlisten) => {
-      if (disposed) {
-        unlisten();
-      } else {
-        cleanups.push(unlisten);
-      }
-    });
-
-    void onJobStarted(handleJobStarted).then((unlisten) => {
-      if (disposed) {
-        unlisten();
-      } else {
-        cleanups.push(unlisten);
-      }
-    });
-
-    void onJobCompleted(handleJobCompleted).then((unlisten) => {
-      if (disposed) {
-        unlisten();
-      } else {
-        cleanups.push(unlisten);
-      }
-    });
-
-    void onJobFailed(handleJobFailed).then((unlisten) => {
-      if (disposed) {
-        unlisten();
-      } else {
-        cleanups.push(unlisten);
-      }
-    });
+    void listen<ToolboxSection>("daemon://toolbox-open", (event) => {
+      setToolboxSection(event.payload);
+    }).then((unlisten) => cleanups.push(unlisten));
 
     return () => {
       disposed = true;
@@ -419,10 +302,7 @@ function App() {
     canUseTauriWindow,
     dismiss,
     handleMessageReady,
-    handleJobCompleted,
-    handleJobFailed,
-    handleJobStarted,
-    refreshPendingProposals,
+    handleMessageDelta,
   ]);
 
   return (
@@ -439,6 +319,10 @@ function App() {
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            void showToolboxMenu();
+          }}
         >
           <div
             aria-label="Daemon"
@@ -504,34 +388,11 @@ function App() {
                   ↵
                 </button>
               </form>
-              <label className="fixture-toggle">
-                <input
-                  type="checkbox"
-                  checked={fixtureMode}
-                  onChange={(event) => setFixtureMode(event.target.checked)}
-                />
-                Use local fixture data
-              </label>
-              {receipt && (
-                <div className="note-receipt" role="status">
-                  <span>
-                    {receipt.duplicate ? "Already remembered" : "Remembered locally"}: {receipt.note.content}
-                  </span>
-                  <button type="button" onClick={handleUndo}>
-                    Undo
-                  </button>
-                </div>
-              )}
-              </div>
+            </div>
             )}
 
-            {proposal && (
-              <ConfirmationCard
-                proposal={proposal}
-                busy={isResolvingProposal}
-                onApprove={handleProposalApprove}
-                onDeny={handleProposalDeny}
-              />
+            {toolboxSection && (
+              <ProviderToolbox section={toolboxSection} onClose={() => setToolboxSection(null)} />
             )}
           </div>
         </section>
