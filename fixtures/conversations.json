@@ -1,0 +1,62 @@
+[
+  {
+    "id": "rehearsal-and-login-bug",
+    "messages": [
+      {
+        "role": "user",
+        "content": "I need to rehearse tomorrow, and this login bug is still blocking me."
+      },
+      {
+        "role": "assistant",
+        "content": "I’ll keep the rehearsal and the unfinished login bug in mind. I can investigate the bug in the approved demo repository when you want me to."
+      }
+    ],
+    "expected_note": "Rehearse tomorrow and investigate the unfinished login bug.",
+    "expected_action": "run_codex_task"
+  },
+  {
+    "id": "rehearsal-only",
+    "messages": [
+      {
+        "role": "user",
+        "content": "I need to rehearse tomorrow."
+      },
+      {
+        "role": "assistant",
+        "content": "I’ll remember that rehearsal is tomorrow."
+      }
+    ],
+    "expected_note": "Rehearse tomorrow.",
+    "expected_action": null
+  },
+  {
+    "id": "login-bug-follow-up",
+    "messages": [
+      {
+        "role": "user",
+        "content": "The demo repository still has that login refresh failure."
+      },
+      {
+        "role": "assistant",
+        "content": "I can prepare a bounded investigation for the approved demo repository."
+      }
+    ],
+    "expected_note": "The demo repository has a login refresh failure.",
+    "expected_action": "run_codex_task"
+  },
+  {
+    "id": "no-action-boundary",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Not now. I only wanted to talk through the rehearsal."
+      },
+      {
+        "role": "assistant",
+        "content": "Understood. I’ll leave the investigation alone."
+      }
+    ],
+    "expected_note": null,
+    "expected_action": null
+  }
+]

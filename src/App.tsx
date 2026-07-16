@@ -5,60 +5,63 @@ import {
   useState,
   type KeyboardEvent,
   type MouseEvent,
+  type FormEvent,
 } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
-import idleDaemon from "./assets/clippy.png";
-import speakingDaemon from "./assets/clippy2.png";
-import waitingDaemon from "./assets/clippy3.png";
+import ConfirmationCard from "./components/ConfirmationCard";
+import Mascot from "./components/Mascot";
+import {
+  approveProposal,
+  denyProposal,
+  pendingProposals,
+  submitConversationTurn,
+  undoNote,
+  type NoteReceipt,
+  type ProposalRecord,
+} from "./lib/daemon";
+import {
+  onMessageReady,
+  onJobCompleted,
+  onJobFailed,
+  onJobStarted,
+  onProposalCreated,
+  onProposalResolved,
+} from "./lib/events";
 import "./App.css";
 
-type CompanionPhase = "idle" | "speaking" | "waiting" | "dismissed";
+type CompanionPhase =
+  | "idle"
+  | "listening"
+  | "speaking"
+  | "waiting"
+  | "completed"
+  | "failed"
+  | "sleeping"
+  | "dismissed";
 
-type Choice = {
-  id: string;
-  label: string;
-  response: string;
-};
-
-const AMBIENT_LINES = [
-  "I found a loose thread in the room.",
-  "Small check-in. Nothing dramatic.",
-  "Your desk has entered thoughtful weather.",
-];
-
-const PROMPT = "What should I keep an eye on next?";
-
-const CHOICES: Choice[] = [
-  {
-    id: "focus",
-    label: "Focus",
-    response: "Good. I will keep the edges quiet for a while.",
-  },
-  {
-    id: "remind",
-    label: "Remind me",
-    response: "Noted. I will bring it back when the moment feels less crowded.",
-  },
-  {
-    id: "ignore",
-    label: "Ignore",
-    response: "Understood. I will let this one drift away.",
-  },
-];
+const PROMPT = "I’m here. What’s been on your mind?";
+const visibleDuration = (text: string) => (text.length / 15) * 1000;
+const PROMPT_VISIBLE_MS = 10_000;
 
 function App() {
   const canUseTauriWindow = "__TAURI_INTERNALS__" in window;
   const [phase, setPhase] = useState<CompanionPhase>("idle");
   const [isRendered, setIsRendered] = useState(true);
-  const [line, setLine] = useState(AMBIENT_LINES[0]);
+  const [line, setLine] = useState("I’m here.");
   const [messageKey, setMessageKey] = useState(0);
-  const [selectedChoice, setSelectedChoice] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [input, setInput] = useState("");
+  const [fixtureMode, setFixtureMode] = useState(false);
+  const [conversationId, setConversationId] = useState<string | undefined>();
+  const [receipt, setReceipt] = useState<NoteReceipt | null>(null);
+  const [proposal, setProposal] = useState<ProposalRecord | null>(null);
+  const [isResolvingProposal, setIsResolvingProposal] = useState(false);
+  const [isJobRunning, setIsJobRunning] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const dragStartRef = useRef<{ x: number; y: number } | null>(null);
   const didDragRef = useRef(false);
-  const lineIndexRef = useRef(0);
   const timersRef = useRef<number[]>([]);
 
   const clearTimers = useCallback(() => {
@@ -74,6 +77,11 @@ function App() {
 
     timersRef.current.push(timer);
   }, []);
+
+  const resetPromptTimer = useCallback(() => {
+    clearTimers();
+    setTimer(() => setPhase("idle"), PROMPT_VISIBLE_MS);
+  }, [clearTimers, setTimer]);
 
   const resizeToContent = useCallback(() => {
     if (!containerRef.current || !canUseTauriWindow) {
@@ -92,42 +100,153 @@ function App() {
   const dismiss = useCallback(() => {
     clearTimers();
     setPhase("idle");
-    setSelectedChoice(null);
   }, [clearTimers]);
 
   const beginConversation = useCallback(() => {
     clearTimers();
 
-    const nextLine = AMBIENT_LINES[lineIndexRef.current % AMBIENT_LINES.length];
-    lineIndexRef.current += 1;
-
     setIsRendered(true);
-    setSelectedChoice(null);
-    setLine(nextLine);
-    setMessageKey((key) => key + 1);
-    setPhase("idle");
-
-    setTimer(() => {
-      setPhase("speaking");
-      setMessageKey((key) => key + 1);
-    }, 220);
+    setLine("I’m listening.");
+    setPhase("listening");
 
     setTimer(() => {
       setPhase("waiting");
-    }, 2700);
+      setTimer(() => setPhase("idle"), PROMPT_VISIBLE_MS);
+    }, 500);
   }, [clearTimers, setTimer]);
 
-  const respondToChoice = (choice: Choice) => {
-    clearTimers();
-    setSelectedChoice(choice.id);
-    setLine(choice.response);
-    setMessageKey((key) => key + 1);
-    setPhase("speaking");
+  const submitMessage = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const content = input.trim();
+    if (!content) {
+      return;
+    }
 
-    setTimer(() => {
-      setPhase("idle");
-    }, 2600);
+    clearTimers();
+    setPhase("listening");
+    setInput("");
+    try {
+      const result = await submitConversationTurn({
+        content,
+        conversationId,
+        fixtureId: fixtureMode ? "rehearsal-and-login-bug" : undefined,
+      });
+      setConversationId(result.conversation_id);
+      const nextReceipt = result.notes[0];
+      if (nextReceipt) {
+        setReceipt(nextReceipt);
+        setTimer(() => setReceipt(null), 6000);
+      }
+    } catch {
+      setLine("I couldn’t save that locally.");
+      setMessageKey((key) => key + 1);
+      setPhase("speaking");
+      setTimer(() => setPhase("idle"), visibleDuration("I couldn’t save that locally."));
+    }
   };
+
+  const handleMessageReady = useCallback(
+    (payload: { content: string }) => {
+      clearTimers();
+      setLine(payload.content);
+      setMessageKey((key) => key + 1);
+      setPhase("speaking");
+      setTimer(() => setPhase("idle"), visibleDuration(payload.content));
+    },
+    [clearTimers, setTimer],
+  );
+
+  const handleUndo = async () => {
+    if (!receipt) {
+      return;
+    }
+    await undoNote(receipt.note.id);
+    setReceipt(null);
+  };
+
+  const refreshPendingProposals = useCallback(async () => {
+    if (!canUseTauriWindow) {
+      return;
+    }
+    try {
+      const pending = await pendingProposals();
+      setProposal(pending[0] ?? null);
+    } catch {
+      setProposal(null);
+    }
+  }, [canUseTauriWindow]);
+
+  const handleProposalApprove = async () => {
+    if (!proposal) {
+      return;
+    }
+    setIsResolvingProposal(true);
+    try {
+      await approveProposal(proposal);
+      setProposal(null);
+      setLine("Preparing the isolated task.");
+      setMessageKey((key) => key + 1);
+      setPhase("speaking");
+      setTimer(() => setPhase("idle"), visibleDuration("Preparing the isolated task."));
+    } catch {
+      setLine("I couldn’t record that approval.");
+      setMessageKey((key) => key + 1);
+      setPhase("speaking");
+      setTimer(() => setPhase("idle"), visibleDuration("I couldn’t record that approval."));
+    } finally {
+      setIsResolvingProposal(false);
+    }
+  };
+
+  const handleProposalDeny = async () => {
+    if (!proposal) {
+      return;
+    }
+    setIsResolvingProposal(true);
+    try {
+      await denyProposal(proposal);
+      setProposal(null);
+      setLine("Okay. I won’t touch it.");
+      setMessageKey((key) => key + 1);
+      setPhase("speaking");
+      setTimer(() => setPhase("idle"), visibleDuration("Okay. I won’t touch it."));
+    } catch {
+      setLine("I couldn’t record that decision.");
+      setMessageKey((key) => key + 1);
+      setPhase("speaking");
+      setTimer(() => setPhase("idle"), visibleDuration("I couldn’t record that decision."));
+    } finally {
+      setIsResolvingProposal(false);
+    }
+  };
+
+  const handleJobStarted = useCallback(() => {
+    setIsJobRunning(true);
+  }, []);
+
+  const handleJobCompleted = useCallback(() => {
+    clearTimers();
+    setIsJobRunning(false);
+    setLine("The isolated task completed.");
+    setMessageKey((key) => key + 1);
+    setPhase("completed");
+    setTimer(() => {
+      setPhase("speaking");
+      setTimer(() => setPhase("idle"), visibleDuration("The isolated task completed."));
+    }, 1200);
+  }, [clearTimers, setTimer]);
+
+  const handleJobFailed = useCallback(() => {
+    clearTimers();
+    setIsJobRunning(false);
+    setLine("The isolated task couldn’t complete.");
+    setMessageKey((key) => key + 1);
+    setPhase("failed");
+    setTimer(() => {
+      setPhase("speaking");
+      setTimer(() => setPhase("idle"), visibleDuration("The isolated task couldn’t complete."));
+    }, 1200);
+  }, [clearTimers, setTimer]);
 
   const handleMouseDown = (event: MouseEvent<HTMLElement>) => {
     if (event.button !== 0) {
@@ -135,7 +254,7 @@ function App() {
     }
 
     const target = event.target;
-    if (target instanceof HTMLElement && target.closest("button")) {
+    if (target instanceof HTMLElement && target.closest("button, input, summary")) {
       return;
     }
 
@@ -157,12 +276,14 @@ function App() {
 
     didDragRef.current = true;
     dragStartRef.current = null;
+    setIsDragging(true);
     event.preventDefault();
     void getCurrentWindow().startDragging();
   };
 
   const handleMouseUp = () => {
     dragStartRef.current = null;
+    setIsDragging(false);
   };
 
   const handleDaemonClick = () => {
@@ -171,7 +292,7 @@ function App() {
       return;
     }
 
-    if (phase === "idle" || phase === "dismissed") {
+    if (phase === "idle" || phase === "sleeping" || phase === "dismissed") {
       beginConversation();
     }
   };
@@ -185,22 +306,12 @@ function App() {
     beginConversation();
   };
 
-  const daemonImage =
-    phase === "waiting"
-      ? waitingDaemon
-      : phase === "speaking"
-        ? speakingDaemon
-        : idleDaemon;
-
   useEffect(() => {
-    let timer: number;
     if (phase === "idle") {
-      timer = window.setTimeout(() => {
-        setPhase("dismissed");
-        setTimer(() => setIsRendered(false), 260);
-      }, 10000);
+      const timer = window.setTimeout(() => setPhase("sleeping"), 10000);
+      return () => window.clearTimeout(timer);
     }
-    return () => window.clearTimeout(timer);
+    return undefined;
   }, [phase, setTimer]);
 
   useEffect(() => {
@@ -218,6 +329,10 @@ function App() {
     const frame = window.requestAnimationFrame(resizeToContent);
     return () => window.cancelAnimationFrame(frame);
   }, [isRendered, line, phase, resizeToContent]);
+
+  useEffect(() => {
+    void refreshPendingProposals();
+  }, [refreshPendingProposals]);
 
   useEffect(() => {
     if (!canUseTauriWindow) {
@@ -243,11 +358,72 @@ function App() {
       }
     });
 
+    void onMessageReady(handleMessageReady).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+      } else {
+        cleanups.push(unlisten);
+      }
+    });
+
+    void onProposalCreated(() => {
+      void refreshPendingProposals();
+    }).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+      } else {
+        cleanups.push(unlisten);
+      }
+    });
+
+    void onProposalResolved(() => {
+      void refreshPendingProposals();
+    }).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+      } else {
+        cleanups.push(unlisten);
+      }
+    });
+
+    void onJobStarted(handleJobStarted).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+      } else {
+        cleanups.push(unlisten);
+      }
+    });
+
+    void onJobCompleted(handleJobCompleted).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+      } else {
+        cleanups.push(unlisten);
+      }
+    });
+
+    void onJobFailed(handleJobFailed).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+      } else {
+        cleanups.push(unlisten);
+      }
+    });
+
     return () => {
       disposed = true;
       cleanups.forEach((cleanup) => cleanup());
     };
-  }, [beginConversation, canUseTauriWindow, dismiss]);
+  }, [
+    beginConversation,
+    canUseTauriWindow,
+    dismiss,
+    handleMessageReady,
+    handleJobCompleted,
+    handleJobFailed,
+    handleJobStarted,
+    refreshPendingProposals,
+  ]);
 
   return (
     <main
@@ -272,17 +448,37 @@ function App() {
             onClick={handleDaemonClick}
             onKeyDown={handleDaemonKeyDown}
           >
-            <img src={daemonImage} alt="" className="daemon-img" />
+            <Mascot
+              isVisible={isRendered}
+              state={
+                isDragging
+                  ? "dragged"
+                  : phase === "speaking"
+                    ? "speaking"
+                    : phase === "listening"
+                      ? "listening"
+                    : phase === "sleeping"
+                      ? "sleeping"
+                      : isJobRunning
+                        ? "working"
+                        : phase === "completed"
+                          ? "completed"
+                          : phase === "failed"
+                            ? "failed"
+                        : "idle"
+              }
+            />
           </div>
 
-          {phase === "speaking" && (
-            <div key={messageKey} className="ambient-line">
-              {line}
-            </div>
-          )}
+          <div className="companion-panel">
+            {(phase === "speaking" || phase === "completed" || phase === "failed") && (
+              <div key={messageKey} className="ambient-line">
+                {line}
+              </div>
+            )}
 
-          {phase === "waiting" && (
-            <div className="interactive-card">
+            {phase === "waiting" && (
+              <div className="interactive-card">
               <button
                 type="button"
                 className="dismiss-button"
@@ -292,22 +488,52 @@ function App() {
                 x
               </button>
               <p className="card-prompt">{PROMPT}</p>
-              <div className="choice-list">
-                {CHOICES.map((choice) => (
-                  <button
-                    key={choice.id}
-                    type="button"
-                    className={`choice-button ${
-                      selectedChoice === choice.id ? "is-selected" : ""
-                    }`}
-                    onClick={() => respondToChoice(choice)}
-                  >
-                    {choice.label}
+              <form className="message-form" onSubmit={submitMessage}>
+                <input
+                  autoFocus
+                  aria-label="Message Daemon"
+                  value={input}
+                  onFocus={resetPromptTimer}
+                  onChange={(event) => {
+                    setInput(event.target.value);
+                    resetPromptTimer();
+                  }}
+                  placeholder="Say it however you want…"
+                />
+                <button type="submit" className="choice-button" aria-label="Send message">
+                  ↵
+                </button>
+              </form>
+              <label className="fixture-toggle">
+                <input
+                  type="checkbox"
+                  checked={fixtureMode}
+                  onChange={(event) => setFixtureMode(event.target.checked)}
+                />
+                Use local fixture data
+              </label>
+              {receipt && (
+                <div className="note-receipt" role="status">
+                  <span>
+                    {receipt.duplicate ? "Already remembered" : "Remembered locally"}: {receipt.note.content}
+                  </span>
+                  <button type="button" onClick={handleUndo}>
+                    Undo
                   </button>
-                ))}
+                </div>
+              )}
               </div>
-            </div>
-          )}
+            )}
+
+            {proposal && (
+              <ConfirmationCard
+                proposal={proposal}
+                busy={isResolvingProposal}
+                onApprove={handleProposalApprove}
+                onDeny={handleProposalDeny}
+              />
+            )}
+          </div>
         </section>
       )}
     </main>

@@ -1,3 +1,14 @@
+mod commands;
+mod events;
+mod jobs;
+mod openai;
+mod proposals;
+mod secrets;
+mod state;
+mod storage;
+mod tools;
+
+use state::AppState;
 use tauri::{
     menu::{Menu, MenuItemBuilder},
     tray::TrayIconBuilder,
@@ -8,20 +19,32 @@ const DAEMON_WINDOW: &str = "daemon";
 const TRIGGER_EVENT: &str = "daemon://trigger";
 const DISMISS_EVENT: &str = "daemon://dismiss";
 
-fn emit_daemon_event(app: &tauri::AppHandle, event: &str) {
+fn summon_daemon(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window(DAEMON_WINDOW) {
         let _ = window.show();
+        let _ = window.center();
         let _ = window.set_focus();
-        let _ = window.emit(event, ());
-    } else {
-        let _ = app.emit_to(DAEMON_WINDOW, event, ());
     }
+    let _ = app.emit_to(DAEMON_WINDOW, TRIGGER_EVENT, ());
+}
+
+fn dismiss_daemon(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window(DAEMON_WINDOW) {
+        let _ = window.hide();
+    }
+    let _ = app.emit_to(DAEMON_WINDOW, DISMISS_EVENT, ());
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            let data_dir = app.path().app_data_dir()?;
+            std::fs::create_dir_all(&data_dir)?;
+            let database_path = data_dir.join("daemon.sqlite3");
+            let state = AppState::new(&database_path)
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+            app.manage(state);
             WebviewWindowBuilder::new(app, DAEMON_WINDOW, WebviewUrl::App("index.html".into()))
                 .transparent(true)
                 .shadow(false)
@@ -43,8 +66,8 @@ pub fn run() {
                 .show_menu_on_left_click(true)
                 .tooltip("Daemon")
                 .on_menu_event(|app, event| match event.id().as_ref() {
-                    "daemon_summon" => emit_daemon_event(app, TRIGGER_EVENT),
-                    "daemon_dismiss" => emit_daemon_event(app, DISMISS_EVENT),
+                    "daemon_summon" => summon_daemon(app),
+                    "daemon_dismiss" => dismiss_daemon(app),
                     "daemon_quit" => {
                         app.cleanup_before_exit();
                         app.exit(0);
@@ -60,6 +83,20 @@ pub fn run() {
 
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![
+            commands::save_api_key,
+            commands::get_auth_status,
+            commands::disconnect_api_key,
+            commands::create_model_response,
+            commands::validate_tool_call,
+            commands::describe_repo,
+            commands::create_run_codex_proposal,
+            commands::approve_proposal,
+            commands::deny_proposal,
+            commands::pending_proposals,
+            commands::submit_conversation_turn,
+            commands::undo_note,
+        ])
         .run(tauri::generate_context!())
         .expect("error");
 }

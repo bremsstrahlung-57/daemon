@@ -1,3 +1,17 @@
+@font-face {
+    font-family: "IBM Plex Mono";
+    font-style: normal;
+    font-weight: 400;
+    src: url("/fonts/IBM_Plex_Mono/IBMPlexMono-Regular.ttf") format("truetype");
+}
+
+@font-face {
+    font-family: "IBM Plex Mono";
+    font-style: normal;
+    font-weight: 500;
+    src: url("/fonts/IBM_Plex_Mono/IBMPlexMono-Medium.ttf") format("truetype");
+}
+
 html,
 body,
 #root {
@@ -10,7 +24,7 @@ body,
 }
 
 body {
-    font-family: "Segoe UI", Inter, system-ui, sans-serif;
+    font-family: "IBM Plex Mono", monospace;
 }
 
 button {
@@ -34,6 +48,7 @@ button {
 
 .companion-shell {
     display: flex;
+    flex-direction: row-reverse;
     align-items: flex-start;
     gap: 12px;
     width: max-content;
@@ -45,6 +60,14 @@ button {
     transition:
         opacity 220ms ease,
         transform 220ms ease;
+}
+
+.companion-panel {
+    display: flex;
+    flex: 0 0 280px;
+    flex-direction: column;
+    align-items: flex-end;
+    min-height: 80px;
 }
 
 .companion-shell:active {
@@ -67,36 +90,12 @@ button {
     outline: none;
 }
 
-.daemon-core::after {
-    content: "";
-    position: absolute;
-    right: 4px;
-    bottom: 6px;
-    width: 9px;
-    height: 9px;
-    border: 1px solid rgba(10, 14, 18, 0.8);
-    border-radius: 999px;
-    background: #78d58a;
-    box-shadow: 0 0 12px rgba(120, 213, 138, 0.6);
-}
-
-.phase-speaking .daemon-core::after {
-    background: #f1c75b;
-    box-shadow: 0 0 12px rgba(241, 199, 91, 0.58);
-}
-
-.phase-waiting .daemon-core::after {
-    background: #6cc7e8;
-    box-shadow: 0 0 12px rgba(108, 199, 232, 0.58);
-}
-
 .daemon-img {
-    width: 80px;
-    height: 80px;
-    object-fit: contain;
+    display: block;
+    flex: 0 0 auto;
+    image-rendering: pixelated;
     pointer-events: none;
     user-select: none;
-    -webkit-user-drag: none;
 }
 
 .ambient-line {
@@ -111,11 +110,16 @@ button {
     line-height: 1.35;
     overflow-wrap: anywhere;
     white-space: normal;
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    border-radius: 8px;
-    background: rgba(17, 20, 22, 0.82);
-    backdrop-filter: blur(18px);
-    animation: ambient-line 2.45s ease both;
+    border: 1px solid rgba(215, 180, 255, 0.32);
+    border-radius: 6px;
+    background:
+        radial-gradient(circle at 12% 0%, rgba(255, 255, 255, 0.22), transparent 34%),
+        radial-gradient(circle at 92% 100%, rgba(183, 108, 255, 0.28), transparent 48%),
+        linear-gradient(135deg, rgba(72, 37, 112, 0.56), rgba(24, 12, 48, 0.38));
+    box-shadow: 0 12px 32px rgba(19, 4, 36, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.17);
+    backdrop-filter: blur(20px) saturate(140%);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+    animation: ambient-line 4.5s ease both;
 }
 
 .ambient-line::before,
@@ -123,11 +127,11 @@ button {
     content: "";
     position: absolute;
     top: 18px;
-    left: -7px;
+    right: -7px;
     width: 12px;
     height: 12px;
-    border-left: 1px solid rgba(255, 255, 255, 0.14);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+    border-top: 1px solid rgba(215, 180, 255, 0.32);
+    border-right: 1px solid rgba(215, 180, 255, 0.32);
     background: inherit;
     transform: rotate(45deg);
 }
@@ -135,25 +139,26 @@ button {
 .interactive-card {
     position: relative;
     box-sizing: border-box;
-    width: 300px;
+    width: 280px;
     margin-top: 3px;
-    padding: 14px;
+    padding: 11px;
     color: #f7f4eb;
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    border-radius: 8px;
-    background: linear-gradient(
-        135deg,
-        rgba(25, 29, 31, 0.96),
-        rgba(12, 14, 15, 0.92)
-    );
-    backdrop-filter: blur(18px);
+    border: 1px solid rgba(215, 180, 255, 0.38);
+    border-radius: 4px;
+    background:
+        radial-gradient(circle at 12% 0%, rgba(255, 255, 255, 0.22), transparent 34%),
+        radial-gradient(circle at 92% 100%, rgba(183, 108, 255, 0.28), transparent 48%),
+        linear-gradient(135deg, rgba(75, 40, 119, 0.56), rgba(25, 12, 51, 0.4));
+    box-shadow: 0 14px 36px rgba(19, 4, 36, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+    backdrop-filter: blur(20px) saturate(145%);
+    -webkit-backdrop-filter: blur(20px) saturate(145%);
     animation: card-in 180ms ease both;
 }
 
 .card-prompt {
-    margin: 0 28px 12px 0;
-    color: #f7f4eb;
-    font-size: 14px;
+    margin: 0 28px 10px 0;
+    color: rgba(205, 245, 255, 0.9);
+    font-size: 12px;
     line-height: 1.35;
 }
 
@@ -161,6 +166,160 @@ button {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 7px;
+}
+
+.message-form {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 5px;
+    padding: 3px;
+    border: 1px solid rgba(215, 180, 255, 0.28);
+    border-radius: 3px;
+    background: rgba(179, 112, 255, 0.1);
+}
+
+.message-form input {
+    min-width: 0;
+    box-sizing: border-box;
+    min-height: 30px;
+    padding: 0 7px;
+    color: #dff9ff;
+    border: 0;
+    border-radius: 2px;
+    outline: none;
+    background: transparent;
+}
+
+.message-form input:focus {
+    box-shadow: inset 2px 0 0 #c68cff;
+}
+
+.fixture-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 10px;
+    color: rgba(247, 244, 235, 0.68);
+    font-size: 11px;
+}
+
+.note-receipt {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 10px;
+    padding-top: 9px;
+    color: rgba(247, 244, 235, 0.82);
+    border-top: 1px solid rgba(198, 240, 255, 0.18);
+    font-size: 11px;
+    line-height: 1.35;
+}
+
+.note-receipt button {
+    flex: 0 0 auto;
+    padding: 2px 6px;
+    color: #f7f4eb;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 5px;
+    background: rgba(255, 255, 255, 0.07);
+    cursor: pointer;
+}
+
+.confirmation-card {
+    box-sizing: border-box;
+    width: 300px;
+    margin-top: 3px;
+    padding: 14px;
+    color: #f7f4eb;
+    border: 1px solid rgba(215, 180, 255, 0.32);
+    border-radius: 8px;
+    background:
+        radial-gradient(circle at 12% 0%, rgba(255, 255, 255, 0.22), transparent 34%),
+        radial-gradient(circle at 92% 100%, rgba(183, 108, 255, 0.28), transparent 48%),
+        linear-gradient(135deg, rgba(75, 40, 119, 0.56), rgba(25, 12, 51, 0.4));
+    box-shadow: 0 14px 36px rgba(19, 4, 36, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+    backdrop-filter: blur(20px) saturate(145%);
+    -webkit-backdrop-filter: blur(20px) saturate(145%);
+}
+
+.confirmation-card > p {
+    margin: 0 0 12px;
+    font-size: 14px;
+    line-height: 1.35;
+}
+
+.confirmation-card dl {
+    display: grid;
+    gap: 6px;
+    margin: 0 0 12px;
+    color: rgba(247, 244, 235, 0.72);
+    font-size: 11px;
+}
+
+.confirmation-card dl div {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.confirmation-card dt,
+.confirmation-card dd {
+    margin: 0;
+}
+
+.confirmation-card dd {
+    color: #f7f4eb;
+    text-align: right;
+}
+
+.confirmation-card details {
+    margin-bottom: 12px;
+    color: rgba(247, 244, 235, 0.75);
+    font-size: 11px;
+}
+
+.confirmation-card summary {
+    cursor: pointer;
+}
+
+.confirmation-card pre {
+    box-sizing: border-box;
+    max-height: 120px;
+    margin: 8px 0 0;
+    padding: 8px;
+    overflow: auto;
+    color: rgba(247, 244, 235, 0.88);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    border-radius: 5px;
+    background: rgba(0, 0, 0, 0.22);
+    font: 10px/1.35 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.confirmation-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 7px;
+}
+
+.confirmation-actions button {
+    min-height: 34px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 7px;
+    color: #f7f4eb;
+    background: rgba(255, 255, 255, 0.07);
+    cursor: pointer;
+}
+
+.confirmation-actions button:first-child {
+    border-color: rgba(108, 199, 232, 0.72);
+    background: rgba(108, 199, 232, 0.18);
+}
+
+.confirmation-actions button:disabled {
+    cursor: wait;
+    opacity: 0.58;
 }
 
 .choice-button,
@@ -172,9 +331,12 @@ button {
 
 .choice-button {
     min-width: 0;
-    min-height: 34px;
+    min-height: 30px;
     padding: 0 9px;
-    border-radius: 7px;
+    color: #061016;
+    border-color: rgba(215, 180, 255, 0.85);
+    border-radius: 2px;
+    background: #c68cff;
     font-size: 12px;
     white-space: nowrap;
     cursor: pointer;
@@ -187,8 +349,9 @@ button {
 .choice-button:hover,
 .choice-button:focus-visible,
 .choice-button.is-selected {
-    border-color: rgba(108, 199, 232, 0.8);
-    background: rgba(108, 199, 232, 0.18);
+    border-color: #f1e5ff;
+    background: #e4c7ff;
+    box-shadow: 0 0 12px rgba(198, 140, 255, 0.56);
     transform: translateY(-1px);
 }
 
