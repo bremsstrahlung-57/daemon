@@ -76,6 +76,21 @@ export const MASCOT_MANIFEST = {
     ],
     fallbackFrame: 0,
   },
+  thinking: {
+    sheet: "/wizard_hat/wizard_hat_thinking.png",
+    sheetWidth: 192,
+    sheetHeight: 192,
+    frameWidth: 64,
+    frameHeight: 64,
+    frames: [
+      frame(200, 0, 0),
+      frame(200, 64, 0),
+      frame(200, 128, 0),
+      frame(200, 0, 64),
+      frame(200, 64, 64),
+    ],
+    fallbackFrame: 0,
+  },
   speaking: {
     sheet: "/wizard_hat/wizard_hat_talking.png",
     sheetWidth: 192,
@@ -149,6 +164,7 @@ export type MascotAnimationName = keyof typeof MASCOT_MANIFEST;
 export const MASCOT_GIFS: Partial<Record<MascotAnimationName, string>> = {
   blinking: "/wizard_hat/wizard_hat_blinking.gif",
   listening: "/wizard_hat/wizard_hat1.gif",
+  thinking: "/wizard_hat/wizard_hat_thinking.gif",
   speaking: "/wizard_hat/wizard_hat_talking.gif",
   sleeping: "/wizard_hat/wizard_hat_sleeping.gif",
   dragged: "/wizard_hat/wizard_hat_dragged.gif",

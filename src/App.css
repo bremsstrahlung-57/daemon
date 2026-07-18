@@ -5,13 +5,6 @@
     src: url("/fonts/IBM_Plex_Mono/IBMPlexMono-Regular.ttf") format("truetype");
 }
 
-@font-face {
-    font-family: "IBM Plex Mono";
-    font-style: normal;
-    font-weight: 500;
-    src: url("/fonts/IBM_Plex_Mono/IBMPlexMono-Medium.ttf") format("truetype");
-}
-
 html,
 body,
 #root {
@@ -25,6 +18,7 @@ body,
 
 body {
     font-family: "IBM Plex Mono", monospace;
+    font-size: 13px;
 }
 
 button {
@@ -48,9 +42,9 @@ button {
 
 .companion-shell {
     display: flex;
-    flex-direction: row-reverse;
+    flex-direction: row;
     align-items: flex-start;
-    gap: 12px;
+    gap: 0;
     width: max-content;
     height: max-content;
     cursor: grab;
@@ -64,10 +58,14 @@ button {
 
 .companion-panel {
     display: flex;
-    flex: 0 0 280px;
+    flex: 0 0 auto;
     flex-direction: column;
-    align-items: flex-end;
-    min-height: 80px;
+    align-items: flex-start;
+    min-height: 0;
+}
+
+.companion-shell.has-panel {
+    gap: 12px;
 }
 
 .companion-shell:active {
@@ -102,12 +100,15 @@ button {
     position: relative;
     box-sizing: border-box;
     width: max-content;
-    max-width: 260px;
+    max-width: 300px;
     margin-top: 7px;
     padding: 10px 13px;
     color: #f6f3ea;
+    font-family: inherit;
     font-size: 13px;
     line-height: 1.35;
+    text-align: left;
+    cursor: pointer;
     overflow-wrap: anywhere;
     white-space: normal;
     border: 1px solid rgba(215, 180, 255, 0.32);
@@ -122,16 +123,21 @@ button {
     animation: ambient-line 4.5s ease both;
 }
 
+.ambient-line:focus-visible {
+    outline: 1px solid #d7b4ff;
+    outline-offset: 3px;
+}
+
 .ambient-line::before,
 .interactive-card::before {
     content: "";
     position: absolute;
     top: 18px;
-    right: -7px;
+    left: -7px;
     width: 12px;
     height: 12px;
-    border-top: 1px solid rgba(215, 180, 255, 0.32);
-    border-right: 1px solid rgba(215, 180, 255, 0.32);
+    border-bottom: 1px solid rgba(215, 180, 255, 0.32);
+    border-left: 1px solid rgba(215, 180, 255, 0.32);
     background: inherit;
     transform: rotate(45deg);
 }
@@ -139,7 +145,7 @@ button {
 .interactive-card {
     position: relative;
     box-sizing: border-box;
-    width: 280px;
+    width: 360px;
     margin-top: 3px;
     padding: 11px;
     color: #f7f4eb;
@@ -181,13 +187,14 @@ button {
 .message-form input {
     min-width: 0;
     box-sizing: border-box;
-    min-height: 30px;
-    padding: 0 7px;
+    min-height: 42px;
+    padding: 0 10px;
     color: #dff9ff;
     border: 0;
     border-radius: 2px;
     outline: none;
     background: transparent;
+    font-size: 13px;
 }
 
 .message-form input:focus {
@@ -214,6 +221,16 @@ button {
     border-top: 1px solid rgba(198, 240, 255, 0.18);
     font-size: 11px;
     line-height: 1.35;
+}
+
+.note-receipt > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.note-receipt-actions {
+    display: flex;
+    gap: 5px;
 }
 
 .note-receipt button {
@@ -324,9 +341,10 @@ button {
 
 .toolbox-card {
     box-sizing: border-box;
-    width: 280px;
+    width: 320px;
     padding: 12px;
     color: #f5edff;
+    font-size: 12px;
     border: 1px solid rgba(215, 180, 255, 0.38);
     border-radius: 6px;
     background: linear-gradient(135deg, rgba(75, 40, 119, 0.68), rgba(25, 12, 51, 0.52));
@@ -334,16 +352,24 @@ button {
     backdrop-filter: blur(20px) saturate(145%);
 }
 
-.toolbox-card header,
-.provider-row {
+.toolbox-card header {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
 }
 
-.provider-row > span {
+.provider-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 6px;
+}
+
+.provider-actions {
     display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
     gap: 4px;
 }
 
@@ -361,7 +387,7 @@ button {
 .toolbox-card button,
 .provider-form input {
     min-width: 0;
-    padding: 7px;
+    padding: 6px 7px;
     color: inherit;
     border: 1px solid rgba(215, 180, 255, 0.28);
     border-radius: 3px;
@@ -376,11 +402,28 @@ button {
     margin-top: 12px;
 }
 
-.provider-row button:first-child {
+.provider-list {
+    max-height: 156px;
+    overflow-y: auto;
+}
+
+.provider-select {
     overflow: hidden;
     text-align: left;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.provider-actions button {
+    padding: 4px 5px;
+    font-size: 10px;
+}
+
+.toolbox-description {
+    margin: 10px 0 0;
+    color: rgba(247, 244, 235, 0.78);
+    font-size: 11px;
+    line-height: 1.4;
 }
 
 .toolbox-message {

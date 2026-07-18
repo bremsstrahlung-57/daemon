@@ -11,7 +11,8 @@ export type ProposalResolvedPayload = {
 };
 
 export type JobLifecyclePayload = { job: JobRecord };
-export type MessageDeltaPayload = { conversation_id: string; content: string };
+export type NoteCreatedPayload = { id: string; content: string };
+export type MascotReactionPayload = { reaction: "happy" | "not_happy" };
 
 export const onMessageReady = (
   handler: (payload: MessageReadyPayload) => void,
@@ -20,9 +21,15 @@ export const onMessageReady = (
     handler(event.payload);
   });
 
-export const onMessageDelta = (
-  handler: (payload: MessageDeltaPayload) => void,
-): Promise<UnlistenFn> => listen<MessageDeltaPayload>("daemon://message-delta", (event) => {
+export const onNoteCreated = (
+  handler: (payload: NoteCreatedPayload) => void,
+): Promise<UnlistenFn> => listen<NoteCreatedPayload>("daemon://note-created", (event) => {
+  handler(event.payload);
+});
+
+export const onMascotReaction = (
+  handler: (payload: MascotReactionPayload) => void,
+): Promise<UnlistenFn> => listen<MascotReactionPayload>("daemon://mascot-reaction", (event) => {
   handler(event.payload);
 });
 

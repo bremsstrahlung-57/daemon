@@ -8,12 +8,15 @@ import {
 export type MascotState =
   | "idle"
   | "listening"
+  | "thinking"
   | "speaking"
   | "sleeping"
   | "dragged"
   | "working"
   | "completed"
-  | "failed";
+  | "failed"
+  | "happy"
+  | "not_happy";
 
 type MascotFrame = {
   animation: MascotAnimationName;
@@ -27,12 +30,15 @@ const IDLE_BLINK_DELAY = 6500;
 const stateAnimation: Record<MascotState, MascotAnimationName> = {
   idle: "idle",
   listening: "listening",
+  thinking: "thinking",
   speaking: "speaking",
   sleeping: "sleeping",
   dragged: "dragged",
   working: "working",
   completed: "completed",
   failed: "failed",
+  happy: "completed",
+  not_happy: "failed",
 };
 
 const prefersReducedMotion = () =>

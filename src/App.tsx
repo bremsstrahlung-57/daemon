@@ -3,9 +3,9 @@ import {
   useEffect,
   useRef,
   useState,
+  type FormEvent,
   type KeyboardEvent,
   type MouseEvent,
-  type FormEvent,
 } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
@@ -14,16 +14,23 @@ import ProviderToolbox, { type ToolboxSection } from "./components/ProviderToolb
 import {
   showToolboxMenu,
   submitConversationTurn,
+  undoNote,
+  type JobRecord,
 } from "./lib/daemon";
 import {
+  onJobCompleted,
+  onJobFailed,
+  onJobStarted,
+  onMascotReaction,
   onMessageReady,
-  onMessageDelta,
+  onNoteCreated,
 } from "./lib/events";
 import "./App.css";
 
 type CompanionPhase =
   | "idle"
   | "listening"
+  | "thinking"
   | "speaking"
   | "waiting"
   | "completed"
@@ -31,19 +38,42 @@ type CompanionPhase =
   | "sleeping"
   | "dismissed";
 
-const PROMPT = "I’m here. What’s been on your mind?";
-const visibleDuration = (text: string) => {
-  if (text.length < 20) {
-    return 3_000;
-  }
-
-  if (text.length < 50) {
-    return 7_000;
-  }
-
-  return 20_000;
-};
+  const PROMPTS = [
+    "What’s been on your mind?",
+    "What would you like to talk about?",
+    "How are you feeling?",
+    "What’s happening?",
+    "Want to tell me something?",
+    "What’s been taking up your thoughts lately?",
+    "Is there something you’d like to get off your chest?",
+    "What would feel helpful to talk through?",
+    "How has your day been going?",
+    "Is anything weighing on you?",
+    "What are you curious about right now?",
+    "Where would you like to start?",
+    "Want to think something through together?",
+    "What’s something you’ve been noticing?",
+    "Is there a decision on your mind?",
+    "What would you like some company with?",
+    "Anything you want to share?"
+  ];
+  const PROMPT = PROMPTS[Math.floor(Math.random() * PROMPTS.length)];
 const PROMPT_VISIBLE_MS = 10_000;
+
+const visibleDuration = (text: string) => Math.max(2_000, (text.length / 18) * 1_000);
+
+const jobSummary = (resultJson: string | null) => {
+  if (!resultJson) {
+    return "";
+  }
+
+  try {
+    const result = JSON.parse(resultJson) as { summary?: unknown };
+    return typeof result.summary === "string" ? result.summary : "";
+  } catch {
+    return "";
+  }
+};
 
 const invocationErrorMessage = (error: unknown) => {
   if (typeof error === "string") {
@@ -66,10 +96,13 @@ function App() {
   const [isDragging, setIsDragging] = useState(false);
   const [input, setInput] = useState("");
   const [conversationId, setConversationId] = useState<string | undefined>();
-  const [isJobRunning] = useState(false);
+  const [isJobRunning, setIsJobRunning] = useState(false);
   const [toolboxSection, setToolboxSection] = useState<ToolboxSection | null>(null);
+  const [noteReceipt, setNoteReceipt] = useState<{ id: string; content: string } | null>(null);
+  const [isUndoingNote, setIsUndoingNote] = useState(false);
+  const [mascotReaction, setMascotReaction] = useState<"happy" | "not_happy" | null>(null);
 
-  const containerRef = useRef<HTMLDivElement>(null);
+  const shellRef = useRef<HTMLElement>(null);
   const dragStartRef = useRef<{ x: number; y: number } | null>(null);
   const didDragRef = useRef(false);
   const timersRef = useRef<number[]>([]);
@@ -94,13 +127,13 @@ function App() {
   }, [clearTimers, setTimer]);
 
   const resizeToContent = useCallback(() => {
-    if (!containerRef.current || !canUseTauriWindow) {
+    if (!shellRef.current || !canUseTauriWindow) {
       return;
     }
 
-    const rect = containerRef.current.getBoundingClientRect();
-    const width = Math.max(1, Math.ceil(rect.width));
-    const height = Math.max(1, Math.ceil(rect.height));
+    const rect = shellRef.current.getBoundingClientRect();
+    const width = Math.max(1, Math.ceil(rect.width + 20));
+    const height = Math.max(1, Math.ceil(rect.height + 20));
 
     void getCurrentWindow()
       .setSize(new LogicalSize(width, height))
@@ -114,7 +147,6 @@ function App() {
 
   const beginConversation = useCallback(() => {
     clearTimers();
-
     setIsRendered(true);
     setLine("I’m listening.");
     setPhase("listening");
@@ -125,6 +157,13 @@ function App() {
     }, 500);
   }, [clearTimers, setTimer]);
 
+  const replyToDaemon = useCallback(() => {
+    clearTimers();
+    setLine("");
+    setPhase("waiting");
+    setTimer(() => setPhase("idle"), PROMPT_VISIBLE_MS);
+  }, [clearTimers, setTimer]);
+
   const submitMessage = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const content = input.trim();
@@ -133,7 +172,7 @@ function App() {
     }
 
     clearTimers();
-    setPhase("listening");
+    setPhase("thinking");
     setLine("");
     setInput("");
     try {
@@ -162,10 +201,62 @@ function App() {
     [clearTimers, setTimer],
   );
 
-  const handleMessageDelta = useCallback((payload: { content: string }) => {
-    setLine((current) => current + payload.content);
-    setPhase("speaking");
+  const handleNoteCreated = useCallback((payload: { id: string; content: string }) => {
+    setIsUndoingNote(false);
+    setNoteReceipt(payload);
   }, []);
+
+  const handleMascotReaction = useCallback((payload: { reaction: "happy" | "not_happy" }) => {
+    setMascotReaction(payload.reaction);
+  }, []);
+
+  const handleJobStarted = useCallback(() => {
+    setIsJobRunning(true);
+  }, []);
+
+  const handleJobCompleted = useCallback(
+    (payload: { job: JobRecord }) => {
+      setIsJobRunning(false);
+      const summary = jobSummary(payload.job.result_json);
+      if (!summary) {
+        return;
+      }
+      clearTimers();
+      setLine(summary);
+      setMessageKey((key) => key + 1);
+      setPhase("completed");
+      setTimer(() => setPhase("idle"), visibleDuration(summary));
+    },
+    [clearTimers, setTimer],
+  );
+
+  const handleJobFailed = useCallback(
+    (payload: { job: JobRecord }) => {
+      setIsJobRunning(false);
+      const message = payload.job.error_message ?? "Codex did not complete the task.";
+      clearTimers();
+      setLine(message);
+      setMessageKey((key) => key + 1);
+      setPhase("failed");
+      setTimer(() => setPhase("idle"), visibleDuration(message));
+    },
+    [clearTimers, setTimer],
+  );
+
+  const undoNoteReceipt = async () => {
+    if (!noteReceipt || isUndoingNote) {
+      return;
+    }
+
+    setIsUndoingNote(true);
+    try {
+      if (await undoNote(noteReceipt.id)) {
+        setNoteReceipt(null);
+      }
+    } finally {
+      setIsUndoingNote(false);
+    }
+  };
 
   const handleMouseDown = (event: MouseEvent<HTMLElement>) => {
     if (event.button !== 0) {
@@ -188,7 +279,6 @@ function App() {
 
     const deltaX = event.clientX - dragStartRef.current.x;
     const deltaY = event.clientY - dragStartRef.current.y;
-
     if (Math.hypot(deltaX, deltaY) < 5 || !canUseTauriWindow) {
       return;
     }
@@ -211,6 +301,11 @@ function App() {
       return;
     }
 
+    if (phase === "speaking" || phase === "completed" || phase === "failed") {
+      replyToDaemon();
+      return;
+    }
+
     if (phase === "idle" || phase === "sleeping" || phase === "dismissed") {
       beginConversation();
     }
@@ -227,31 +322,48 @@ function App() {
 
   useEffect(() => {
     if (phase === "idle") {
-      const timer = window.setTimeout(() => setPhase("sleeping"), 10000);
+      const timer = window.setTimeout(() => setPhase("sleeping"), 10_000);
       return () => window.clearTimeout(timer);
     }
     return undefined;
-  }, [phase, setTimer]);
+  }, [phase]);
 
   useEffect(() => {
-    if (!containerRef.current || !canUseTauriWindow) {
+    if (!noteReceipt) {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => setNoteReceipt(null), 5_000);
+    return () => window.clearTimeout(timer);
+  }, [noteReceipt]);
+
+  useEffect(() => {
+    if (!mascotReaction) {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => setMascotReaction(null), 7_000);
+    return () => window.clearTimeout(timer);
+  }, [mascotReaction]);
+
+  useEffect(() => {
+    if (!shellRef.current || !canUseTauriWindow) {
       return;
     }
 
-    const observer = new ResizeObserver(() => resizeToContent());
-    observer.observe(containerRef.current);
-
+    const observer = new ResizeObserver(resizeToContent);
+    observer.observe(shellRef.current);
     return () => observer.disconnect();
   }, [canUseTauriWindow, resizeToContent]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(resizeToContent);
     return () => window.cancelAnimationFrame(frame);
-  }, [isRendered, line, phase, resizeToContent]);
+  }, [isRendered, line, noteReceipt, phase, resizeToContent, toolboxSection]);
 
   useEffect(() => {
     if (!canUseTauriWindow) {
-      return;
+      return undefined;
     }
 
     let disposed = false;
@@ -281,7 +393,39 @@ function App() {
       }
     });
 
-    void onMessageDelta(handleMessageDelta).then((unlisten) => {
+    void onNoteCreated(handleNoteCreated).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+      } else {
+        cleanups.push(unlisten);
+      }
+    });
+
+    void onMascotReaction(handleMascotReaction).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+      } else {
+        cleanups.push(unlisten);
+      }
+    });
+
+    void onJobStarted(handleJobStarted).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+      } else {
+        cleanups.push(unlisten);
+      }
+    });
+
+    void onJobCompleted(handleJobCompleted).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+      } else {
+        cleanups.push(unlisten);
+      }
+    });
+
+    void onJobFailed(handleJobFailed).then((unlisten) => {
       if (disposed) {
         unlisten();
       } else {
@@ -301,20 +445,27 @@ function App() {
     beginConversation,
     canUseTauriWindow,
     dismiss,
+    handleJobCompleted,
+    handleJobFailed,
+    handleJobStarted,
     handleMessageReady,
-    handleMessageDelta,
+    handleMascotReaction,
+    handleNoteCreated,
   ]);
 
+  const hasPanel = phase === "speaking"
+    || phase === "completed"
+    || phase === "failed"
+    || phase === "waiting"
+    || noteReceipt
+    || toolboxSection;
+
   return (
-    <main
-      ref={containerRef}
-      className={`daemon-container phase-${phase} ${
-        isRendered ? "is-rendered" : "is-hidden"
-      }`}
-    >
+    <main className={`daemon-container phase-${phase} ${isRendered ? "is-rendered" : "is-hidden"}`}>
       {isRendered && (
         <section
-          className="companion-shell"
+          ref={shellRef}
+          className={`companion-shell ${hasPanel ? "has-panel" : ""}`}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
@@ -337,58 +488,77 @@ function App() {
               state={
                 isDragging
                   ? "dragged"
-                  : phase === "speaking"
+                  : mascotReaction
+                    ? mascotReaction
+                    : phase === "speaking"
                     ? "speaking"
                     : phase === "listening"
                       ? "listening"
-                    : phase === "sleeping"
-                      ? "sleeping"
-                      : isJobRunning
-                        ? "working"
-                        : phase === "completed"
-                          ? "completed"
-                          : phase === "failed"
-                            ? "failed"
-                        : "idle"
+                      : phase === "thinking"
+                        ? "thinking"
+                      : phase === "sleeping"
+                        ? "sleeping"
+                        : isJobRunning
+                          ? "working"
+                          : phase === "completed"
+                            ? "completed"
+                            : phase === "failed"
+                              ? "failed"
+                              : "idle"
               }
             />
           </div>
 
           <div className="companion-panel">
             {(phase === "speaking" || phase === "completed" || phase === "failed") && (
-              <div key={messageKey} className="ambient-line">
+              <button
+                key={messageKey}
+                type="button"
+                className="ambient-line"
+                aria-label="Reply to Daemon"
+                onClick={replyToDaemon}
+              >
                 {line}
-              </div>
+              </button>
+            )}
+
+            {noteReceipt && (
+              <aside className="note-receipt" aria-label="Note saved">
+                <span>{noteReceipt.content}</span>
+                <div className="note-receipt-actions">
+                  <button type="button" disabled={isUndoingNote} onClick={() => void undoNoteReceipt()}>
+                    Undo
+                  </button>
+                  <button type="button" aria-label="Dismiss saved note" onClick={() => setNoteReceipt(null)}>
+                    ×
+                  </button>
+                </div>
+              </aside>
             )}
 
             {phase === "waiting" && (
               <div className="interactive-card">
-              <button
-                type="button"
-                className="dismiss-button"
-                aria-label="Dismiss"
-                onClick={dismiss}
-              >
-                x
-              </button>
-              <p className="card-prompt">{PROMPT}</p>
-              <form className="message-form" onSubmit={submitMessage}>
-                <input
-                  autoFocus
-                  aria-label="Message Daemon"
-                  value={input}
-                  onFocus={resetPromptTimer}
-                  onChange={(event) => {
-                    setInput(event.target.value);
-                    resetPromptTimer();
-                  }}
-                  placeholder="Say it however you want…"
-                />
-                <button type="submit" className="choice-button" aria-label="Send message">
-                  ↵
+                <button type="button" className="dismiss-button" aria-label="Dismiss" onClick={dismiss}>
+                  ×
                 </button>
-              </form>
-            </div>
+                <p className="card-prompt">{PROMPT}</p>
+                <form className="message-form" onSubmit={submitMessage}>
+                  <input
+                    autoFocus
+                    aria-label="Message Daemon"
+                    value={input}
+                    onFocus={resetPromptTimer}
+                    onChange={(event) => {
+                      setInput(event.target.value);
+                      resetPromptTimer();
+                    }}
+                    placeholder="Say it however you want…"
+                  />
+                  <button type="submit" className="choice-button" aria-label="Send message">
+                    ↵
+                  </button>
+                </form>
+              </div>
             )}
 
             {toolboxSection && (

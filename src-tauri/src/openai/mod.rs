@@ -1,7 +1,7 @@
 mod types;
 pub mod turns;
 
-pub use types::{ChatCompletionChunk, ChatCompletionRequest, ChatMessage, ModelTurnRequest, ResponsesApiResponse, ResponsesRequest, TurnMessage, TurnRole};
+pub use types::{create_memory_tool, create_note_tool, search_memories_tool, search_notes_tool, show_mascot_reaction_tool, ChatCompletionFunctionTool, ChatCompletionMessage, ChatCompletionRequest, ChatCompletionResponse, ChatCompletionToolCall, ModelTurnRequest, ResponsesApiResponse, ResponsesInputContent, ResponsesInputItem, ResponsesRequest, TurnMessage, TurnRole};
 
 use crate::{secrets::SecretStore, storage::ProviderRecord};
 use reqwest::Client;
@@ -30,116 +30,112 @@ impl OpenAiClient {
         request: ModelTurnRequest,
     ) -> Result<ResponsesApiResponse, String> {
         let api_key = self.secrets.load_api_key()?;
-        if request.messages.is_empty() {
-            return Err("A model turn requires at least one message".to_string());
+        self.send_response(
+            self.endpoint.clone(),
+            Some(api_key),
+            ResponsesRequest::from_turn(request),
+        )
+        .await
+    }
+
+    pub async fn create_provider_completion(
+        &self,
+        provider: &ProviderRecord,
+        messages: Vec<ChatCompletionMessage>,
+        tools: Vec<ChatCompletionFunctionTool>,
+    ) -> Result<ChatCompletionResponse, String> {
+        let endpoint = format!("{}/chat/completions", provider.base_url.trim_end_matches('/'));
+        self.send_provider_completion(
+            endpoint,
+            self.secrets.load_provider_api_key(&provider.id).ok(),
+            ChatCompletionRequest {
+                model: provider.model.clone(),
+                messages,
+                parallel_tool_calls: (!tools.is_empty()).then_some(false),
+                tools,
+            },
+        )
+        .await
+    }
+
+    async fn send_provider_completion(
+        &self,
+        endpoint: String,
+        api_key: Option<String>,
+        body: ChatCompletionRequest,
+    ) -> Result<ChatCompletionResponse, String> {
+        if body.messages.is_empty() {
+            return Err("A conversation requires at least one message".to_string());
         }
 
-        let body = ResponsesRequest {
-            model: request
-                .model
-                .unwrap_or_else(|| DEFAULT_LUNA_MODEL.to_string()),
-            instructions: request.instructions,
-            input: request
-                .messages
-                .into_iter()
-                .map(|message| ResponsesRequest::input_item(message))
-                .collect(),
+        let request = self.http.post(endpoint).json(&body);
+        let request = match api_key {
+            Some(api_key) => request.bearer_auth(api_key),
+            None => request,
         };
-
-        let response = self
-            .http
-            .post(&self.endpoint)
-            .bearer_auth(api_key)
-            .json(&body)
+        let response = request
             .send()
             .await
-            .map_err(|_| "The OpenAI request could not be sent".to_string())?;
-
+            .map_err(|_| "The selected AI provider could not be reached".to_string())?;
         let status = response.status();
         if !status.is_success() {
-            return Err(format!("The OpenAI request failed with status {}", status.as_u16()));
+            return Err(format!("The selected AI provider returned {}", status.as_u16()));
+        }
+        response
+            .json::<ChatCompletionResponse>()
+            .await
+            .map_err(|_| "The selected AI provider sent an invalid response".to_string())
+    }
+
+    async fn send_response(
+        &self,
+        endpoint: String,
+        api_key: Option<String>,
+        body: ResponsesRequest,
+    ) -> Result<ResponsesApiResponse, String> {
+        if body.input.is_empty() {
+            return Err("A model turn requires at least one input item".to_string());
         }
 
+        let request = self.http.post(endpoint).json(&body);
+        let request = match api_key {
+            Some(api_key) => request.bearer_auth(api_key),
+            None => request,
+        };
+        let response = request
+            .send()
+            .await
+            .map_err(|_| "The OpenAI response request could not be sent".to_string())?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(format!("The OpenAI response request failed with status {}", status.as_u16()));
+        }
         response
             .json::<ResponsesApiResponse>()
             .await
             .map_err(|_| "The OpenAI response was not understood".to_string())
     }
 
-    pub async fn stream_chat<F>(
-        &self,
-        provider: &ProviderRecord,
-        messages: Vec<ChatMessage>,
-        mut on_delta: F,
-    ) -> Result<String, String>
-    where
-        F: FnMut(&str),
-    {
-        if messages.is_empty() {
-            return Err("A conversation requires at least one message".to_string());
-        }
-        let endpoint = format!("{}/chat/completions", provider.base_url.trim_end_matches('/'));
-        let request = self.http.post(endpoint).json(&ChatCompletionRequest {
-            model: provider.model.clone(),
-            messages,
-            stream: true,
-        });
-        let request = match self.secrets.load_provider_api_key(&provider.id) {
-            Ok(api_key) => request.bearer_auth(api_key),
-            Err(_) => request,
-        };
-        let mut response = request
-            .send()
-            .await
-            .map_err(|_| "The selected AI provider could not be reached".to_string())?;
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let body = response.text().await.unwrap_or_default();
-            return Err(format!("The selected AI provider returned {status}: {}", body.chars().take(240).collect::<String>()));
-        }
-        let mut pending = String::new();
-        let mut output = String::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|_| "The AI provider stream ended unexpectedly".to_string())?
-        {
-            pending.push_str(&String::from_utf8_lossy(&chunk));
-            while let Some(end) = pending.find("\n\n") {
-                let event = pending[..end].to_string();
-                pending.drain(..end + 2);
-                let Some(data) = event.lines().find_map(|line| line.strip_prefix("data:")) else {
-                    continue;
-                };
-                let data = data.trim();
-                if data == "[DONE]" {
-                    continue;
-                }
-                let chunk: ChatCompletionChunk = serde_json::from_str(data)
-                    .map_err(|_| "The selected AI provider sent an invalid streaming response".to_string())?;
-                for choice in chunk.choices {
-                    if let Some(delta) = choice.delta.content {
-                        on_delta(&delta);
-                        output.push_str(&delta);
-                    }
-                }
-            }
-        }
-        if output.trim().is_empty() {
-            return Err("The selected AI provider returned an empty response".to_string());
-        }
-        Ok(output)
-    }
 }
 
 impl ResponsesRequest {
-    fn input_item(message: TurnMessage) -> types::ResponsesInputItem {
-        types::ResponsesInputItem {
+    fn from_turn(request: ModelTurnRequest) -> Self {
+        Self {
+            model: request
+                .model
+                .unwrap_or_else(|| DEFAULT_LUNA_MODEL.to_string()),
+            instructions: request.instructions,
+            input: request.messages.into_iter().map(Self::input_item).collect(),
+        }
+    }
+
+    fn input_item(message: TurnMessage) -> ResponsesInputItem {
+        ResponsesInputItem {
             role: match message.role {
                 TurnRole::User => "user".to_string(),
                 TurnRole::Assistant => "assistant".to_string(),
             },
-            content: vec![types::ResponsesInputContent {
+            content: vec![ResponsesInputContent {
                 content_type: "input_text",
                 text: message.content,
             }],

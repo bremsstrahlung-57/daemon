@@ -25,6 +25,23 @@ pub struct MessageRecord {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct NoteRecord {
+    pub id: String,
+    pub content: String,
+    pub source_message_id: String,
+    pub created_at: i64,
+    pub deleted_at: Option<i64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct MemoryRecord {
+    pub id: String,
+    pub content: String,
+    pub source_message_id: String,
+    pub created_at: i64,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct ProposalRecord {
     pub id: String,
     pub conversation_id: String,
@@ -115,6 +132,12 @@ impl Storage {
                  created_at INTEGER NOT NULL,
                  deleted_at INTEGER
              );
+             CREATE TABLE IF NOT EXISTS memories (
+                 id TEXT PRIMARY KEY,
+                 content TEXT NOT NULL,
+                 source_message_id TEXT NOT NULL REFERENCES messages(id),
+                 created_at INTEGER NOT NULL
+             );
              CREATE TABLE IF NOT EXISTS proposals (
                  id TEXT PRIMARY KEY,
                  conversation_id TEXT NOT NULL REFERENCES conversations(id),
@@ -159,6 +182,7 @@ impl Storage {
              );
              CREATE INDEX IF NOT EXISTS messages_conversation_idx ON messages(conversation_id, created_at);
              CREATE INDEX IF NOT EXISTS notes_source_idx ON notes(source_message_id, created_at);
+             CREATE INDEX IF NOT EXISTS memories_created_idx ON memories(created_at);
              CREATE INDEX IF NOT EXISTS proposals_status_idx ON proposals(status, created_at);
              CREATE INDEX IF NOT EXISTS jobs_status_idx ON jobs(status, completed_at);
              CREATE INDEX IF NOT EXISTS audit_entity_idx ON audit_events(entity_type, entity_id, created_at);",
@@ -223,6 +247,192 @@ impl Storage {
             })?
             .collect();
         messages
+    }
+
+    pub fn recent_notes_for_conversation(
+        &self,
+        conversation_id: &str,
+        created_after: i64,
+    ) -> SqlResult<Vec<NoteRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT notes.id, notes.content, notes.source_message_id, notes.created_at, notes.deleted_at
+             FROM notes
+             INNER JOIN messages ON messages.id = notes.source_message_id
+             WHERE messages.conversation_id = ?1
+               AND notes.deleted_at IS NULL
+               AND notes.created_at >= ?2
+             ORDER BY notes.created_at DESC",
+        )?;
+        let notes = statement
+            .query_map(params![conversation_id, created_after], |row| {
+                Ok(NoteRecord {
+                    id: row.get(0)?,
+                    content: row.get(1)?,
+                    source_message_id: row.get(2)?,
+                    created_at: row.get(3)?,
+                    deleted_at: row.get(4)?,
+                })
+            })?
+            .collect();
+        notes
+    }
+
+    pub fn search_notes(&self, query: &str, limit: usize) -> SqlResult<Vec<NoteRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, content, source_message_id, created_at, deleted_at
+             FROM notes
+             WHERE deleted_at IS NULL
+             ORDER BY created_at DESC
+             LIMIT 100",
+        )?;
+        let notes = statement
+            .query_map([], |row| {
+                Ok(NoteRecord {
+                    id: row.get(0)?,
+                    content: row.get(1)?,
+                    source_message_id: row.get(2)?,
+                    created_at: row.get(3)?,
+                    deleted_at: row.get(4)?,
+                })
+            })?
+            .collect::<SqlResult<Vec<_>>>()?;
+        Ok(rank_records(notes, query, limit, |note| &note.content))
+    }
+
+    pub fn search_memories(&self, query: &str, limit: usize) -> SqlResult<Vec<MemoryRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, content, source_message_id, created_at
+             FROM memories
+             ORDER BY created_at DESC
+             LIMIT 100",
+        )?;
+        let memories = statement
+            .query_map([], |row| {
+                Ok(MemoryRecord {
+                    id: row.get(0)?,
+                    content: row.get(1)?,
+                    source_message_id: row.get(2)?,
+                    created_at: row.get(3)?,
+                })
+            })?
+            .collect::<SqlResult<Vec<_>>>()?;
+        Ok(rank_records(memories, query, limit, |memory| &memory.content))
+    }
+
+    pub fn insert_note_with_audit(
+        &mut self,
+        content: &str,
+        source_message_id: &str,
+    ) -> SqlResult<NoteRecord> {
+        let created_at = now_ms();
+        let note = NoteRecord {
+            id: new_id(),
+            content: content.to_string(),
+            source_message_id: source_message_id.to_string(),
+            created_at,
+            deleted_at: None,
+        };
+        let audit = AuditEventRecord {
+            id: new_id(),
+            entity_type: "note".to_string(),
+            entity_id: note.id.clone(),
+            event_type: "created".to_string(),
+            details_json: Some(serde_json::json!({ "content": note.content }).to_string()),
+            created_at,
+        };
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        transaction.execute(
+            "INSERT INTO notes (id, content, source_message_id, created_at, deleted_at)
+             VALUES (?1, ?2, ?3, ?4, NULL)",
+            params![note.id, note.content, note.source_message_id, note.created_at],
+        )?;
+        transaction.execute(
+            "INSERT INTO audit_events (id, entity_type, entity_id, event_type, details_json, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                audit.id,
+                audit.entity_type,
+                audit.entity_id,
+                audit.event_type,
+                audit.details_json,
+                audit.created_at,
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(note)
+    }
+
+    pub fn insert_memory_with_audit(
+        &mut self,
+        content: &str,
+        source_message_id: &str,
+    ) -> SqlResult<MemoryRecord> {
+        let created_at = now_ms();
+        let memory = MemoryRecord {
+            id: new_id(),
+            content: content.to_string(),
+            source_message_id: source_message_id.to_string(),
+            created_at,
+        };
+        let audit = AuditEventRecord {
+            id: new_id(),
+            entity_type: "memory".to_string(),
+            entity_id: memory.id.clone(),
+            event_type: "created".to_string(),
+            details_json: Some(serde_json::json!({ "content": memory.content }).to_string()),
+            created_at,
+        };
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        transaction.execute(
+            "INSERT INTO memories (id, content, source_message_id, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                memory.id,
+                memory.content,
+                memory.source_message_id,
+                memory.created_at,
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO audit_events (id, entity_type, entity_id, event_type, details_json, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                audit.id,
+                audit.entity_type,
+                audit.entity_id,
+                audit.event_type,
+                audit.details_json,
+                audit.created_at,
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(memory)
+    }
+
+    pub fn soft_delete_note_with_audit(&mut self, note_id: &str) -> SqlResult<bool> {
+        let deleted_at = now_ms();
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let changed = transaction.execute(
+            "UPDATE notes SET deleted_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
+            params![deleted_at, note_id],
+        )?;
+        if changed == 0 {
+            transaction.commit()?;
+            return Ok(false);
+        }
+        transaction.execute(
+            "INSERT INTO audit_events (id, entity_type, entity_id, event_type, details_json, created_at)
+             VALUES (?1, ?2, ?3, ?4, NULL, ?5)",
+            params![new_id(), "note", note_id, "deleted", deleted_at],
+        )?;
+        transaction.commit()?;
+        Ok(true)
     }
 
     pub fn providers(&self) -> SqlResult<Vec<ProviderRecord>> {
@@ -603,4 +813,252 @@ fn provider_from_row(row: &rusqlite::Row<'_>) -> SqlResult<ProviderRecord> {
         created_at: row.get(5)?,
         updated_at: row.get(6)?,
     })
+}
+
+fn rank_records<T, F>(records: Vec<T>, query: &str, limit: usize, content: F) -> Vec<T>
+where
+    F: Fn(&T) -> &str,
+{
+    if limit == 0 {
+        return Vec::new();
+    }
+    let query_tokens = searchable_tokens(query);
+    if query_tokens.is_empty() {
+        return records.into_iter().take(limit).collect();
+    }
+    let mut matches = records
+        .into_iter()
+        .filter_map(|record| {
+            let score = searchable_tokens(content(&record))
+                .iter()
+                .filter(|token| query_tokens.contains(*token))
+                .count();
+            (score > 0).then_some((score, record))
+        })
+        .collect::<Vec<_>>();
+    matches.sort_by(|left, right| right.0.cmp(&left.0));
+    matches
+        .into_iter()
+        .take(limit)
+        .map(|(_, record)| record)
+        .collect()
+}
+
+fn searchable_tokens(value: &str) -> std::collections::HashSet<String> {
+    const STOP_WORDS: &[&str] = &[
+        "a", "an", "about", "are", "did", "do", "i", "is", "me", "memory", "memories", "my",
+        "note", "notes", "please", "remember", "tell", "the", "what", "you",
+    ];
+    value
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter_map(|token| {
+            let token = token.to_ascii_lowercase();
+            (!token.is_empty() && !STOP_WORDS.contains(&token.as_str())).then_some(token)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{env, fs};
+
+    #[test]
+    fn note_insert_creates_its_audit_row() {
+        let path = env::temp_dir().join(format!("daemon-storage-{}.sqlite3", Uuid::new_v4()));
+        let mut storage = Storage::open(&path).expect("temporary database should open");
+        let conversation = storage
+            .create_conversation()
+            .expect("conversation should be created");
+        let message = storage
+            .append_message(&conversation.id, "user", "I need to fix the login bug tomorrow")
+            .expect("message should be created");
+        let note = storage
+            .insert_note_with_audit("Fix the login bug tomorrow", &message.id)
+            .expect("note should be created");
+        let audit: (String, String, String, i64) = storage
+            .connection
+            .query_row(
+                "SELECT entity_type, event_type, details_json, created_at
+                 FROM audit_events WHERE entity_id = ?1",
+                params![note.id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("note audit should exist");
+
+        assert_eq!(audit.0, "note");
+        assert_eq!(audit.1, "created");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&audit.2)
+                .expect("note audit details should be JSON"),
+            serde_json::json!({ "content": "Fix the login bug tomorrow" }),
+        );
+        assert_eq!(audit.3, note.created_at);
+        drop(storage);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn memory_insert_creates_its_audit_row() {
+        let path = env::temp_dir().join(format!("daemon-memory-{}.sqlite3", Uuid::new_v4()));
+        let mut storage = Storage::open(&path).expect("temporary database should open");
+        let conversation = storage
+            .create_conversation()
+            .expect("conversation should be created");
+        let message = storage
+            .append_message(&conversation.id, "user", "My favorite color is purple")
+            .expect("message should be created");
+        let memory = storage
+            .insert_memory_with_audit("Favorite color: purple", &message.id)
+            .expect("memory should be created");
+        let audit: (String, String, String, i64) = storage
+            .connection
+            .query_row(
+                "SELECT entity_type, event_type, details_json, created_at
+                 FROM audit_events WHERE entity_id = ?1",
+                params![memory.id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("memory audit should exist");
+
+        assert_eq!(audit.0, "memory");
+        assert_eq!(audit.1, "created");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&audit.2)
+                .expect("memory audit details should be JSON"),
+            serde_json::json!({ "content": "Favorite color: purple" }),
+        );
+        assert_eq!(audit.3, memory.created_at);
+        drop(storage);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn local_search_returns_relevant_active_records() {
+        let path = env::temp_dir().join(format!("daemon-search-{}.sqlite3", Uuid::new_v4()));
+        let mut storage = Storage::open(&path).expect("temporary database should open");
+        let conversation = storage
+            .create_conversation()
+            .expect("conversation should be created");
+        let message = storage
+            .append_message(&conversation.id, "user", "I prefer purple and need a budget reminder")
+            .expect("message should be created");
+        storage
+            .insert_memory_with_audit("Favorite color: purple", &message.id)
+            .expect("memory should be created");
+        let note = storage
+            .insert_note_with_audit("Review the project budget", &message.id)
+            .expect("note should be created");
+
+        assert_eq!(
+            storage
+                .search_memories("favorite color", 5)
+                .expect("memory search should work")[0]
+                .content,
+            "Favorite color: purple"
+        );
+        assert_eq!(
+            storage
+                .search_notes("budget", 5)
+                .expect("note search should work")[0]
+                .id,
+            note.id
+        );
+        storage
+            .soft_delete_note_with_audit(&note.id)
+            .expect("note should be deleted");
+        assert!(storage
+            .search_notes("budget", 5)
+            .expect("note search should work")
+            .is_empty());
+        drop(storage);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn note_insert_rolls_back_when_its_audit_insert_fails() {
+        let path = env::temp_dir().join(format!("daemon-storage-{}.sqlite3", Uuid::new_v4()));
+        let mut storage = Storage::open(&path).expect("temporary database should open");
+        let conversation = storage
+            .create_conversation()
+            .expect("conversation should be created");
+        let message = storage
+            .append_message(&conversation.id, "user", "Remind me tomorrow")
+            .expect("message should be created");
+        storage
+            .connection
+            .execute_batch(
+                "CREATE TRIGGER fail_note_audit
+                 BEFORE INSERT ON audit_events
+                 WHEN NEW.entity_type = 'note'
+                 BEGIN
+                   SELECT RAISE(ABORT, 'forced audit failure');
+                 END;",
+            )
+            .expect("failure trigger should be created");
+
+        assert!(storage
+            .insert_note_with_audit("Remember tomorrow", &message.id)
+            .is_err());
+
+        let note_count: i64 = storage
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM notes WHERE source_message_id = ?1",
+                params![message.id],
+                |row| row.get(0),
+            )
+            .expect("note count should load");
+        let audit_count: i64 = storage
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM audit_events WHERE entity_type = 'note'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("audit count should load");
+
+        assert_eq!(note_count, 0);
+        assert_eq!(audit_count, 0);
+        drop(storage);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn soft_delete_note_creates_a_matching_audit_event() {
+        let path = env::temp_dir().join(format!("daemon-storage-{}.sqlite3", Uuid::new_v4()));
+        let mut storage = Storage::open(&path).expect("temporary database should open");
+        let conversation = storage
+            .create_conversation()
+            .expect("conversation should be created");
+        let message = storage
+            .append_message(&conversation.id, "user", "Remind me tomorrow")
+            .expect("message should be created");
+        let note = storage
+            .insert_note_with_audit("Remember tomorrow", &message.id)
+            .expect("note should be created");
+
+        assert!(storage
+            .soft_delete_note_with_audit(&note.id)
+            .expect("note should be soft deleted"));
+
+        let deleted: (Option<i64>, i64) = storage
+            .connection
+            .query_row(
+                "SELECT notes.deleted_at, audit_events.created_at
+                 FROM notes
+                 INNER JOIN audit_events ON audit_events.entity_id = notes.id
+                 WHERE notes.id = ?1 AND audit_events.event_type = 'deleted'",
+                params![note.id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("deleted note audit should exist");
+
+        assert_eq!(deleted.0, Some(deleted.1));
+        assert!(!storage
+            .soft_delete_note_with_audit(&note.id)
+            .expect("duplicate deletion should be safe"));
+        drop(storage);
+        let _ = fs::remove_file(path);
+    }
 }

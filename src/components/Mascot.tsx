@@ -14,12 +14,15 @@ type MascotProps = {
 const LABELS: Record<MascotState, string> = {
   idle: "Daemon is idle",
   listening: "Daemon is listening",
+  thinking: "Daemon is thinking",
   speaking: "Daemon is speaking",
   sleeping: "Daemon is sleeping",
   dragged: "Daemon is being dragged",
   working: "Daemon is working",
   completed: "Daemon completed the task",
   failed: "Daemon could not complete the task",
+  happy: "Daemon is happy",
+  not_happy: "Daemon is not happy",
 };
 
 function Mascot({ state, isVisible }: MascotProps) {

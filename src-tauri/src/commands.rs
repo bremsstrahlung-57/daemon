@@ -10,12 +10,18 @@ use crate::{
     state::AppState,
     tools::{DescribeRepoRequest, ProposedToolCall, RepositoryMetadata, ValidatedToolCall},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{menu::{ContextMenu, Menu, MenuItemBuilder}, AppHandle, State, Window};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct AuthStatus {
     pub configured: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NoteIdRequest {
+    pub note_id: String,
 }
 
 #[tauri::command]
@@ -39,17 +45,15 @@ pub fn disconnect_api_key(state: State<'_, AppState>) -> Result<AuthStatus, Stri
 
 #[tauri::command]
 pub fn show_toolbox_menu(app: AppHandle, window: Window) -> Result<(), String> {
-    let providers = MenuItemBuilder::with_id("daemon_toolbox_providers", "AI Providers").build(&app)
-        .map_err(|_| "Unable to open the toolbox".to_string())?;
-    let keys = MenuItemBuilder::with_id("daemon_toolbox_keys", "API Keys").build(&app)
-        .map_err(|_| "Unable to open the toolbox".to_string())?;
-    let models = MenuItemBuilder::with_id("daemon_toolbox_models", "Models").build(&app)
-        .map_err(|_| "Unable to open the toolbox".to_string())?;
     let settings = MenuItemBuilder::with_id("daemon_toolbox_settings", "Settings").build(&app)
         .map_err(|_| "Unable to open the toolbox".to_string())?;
     let about = MenuItemBuilder::with_id("daemon_toolbox_about", "About").build(&app)
         .map_err(|_| "Unable to open the toolbox".to_string())?;
-    let menu = Menu::with_items(&app, &[&providers, &keys, &models, &settings, &about])
+    let dismiss = MenuItemBuilder::with_id("daemon_toolbox_dismiss", "Dismiss").build(&app)
+        .map_err(|_| "Unable to open the toolbox".to_string())?;
+    let quit = MenuItemBuilder::with_id("daemon_toolbox_quit", "Quit").build(&app)
+        .map_err(|_| "Unable to open the toolbox".to_string())?;
+    let menu = Menu::with_items(&app, &[&settings, &about, &dismiss, &quit])
         .map_err(|_| "Unable to open the toolbox".to_string())?;
     menu.popup(window)
         .map_err(|_| "Unable to open the toolbox".to_string())
@@ -78,6 +82,19 @@ pub fn delete_provider_key(state: State<'_, AppState>, request: ProviderIdReques
 #[tauri::command]
 pub fn delete_provider(state: State<'_, AppState>, request: ProviderIdRequest) -> Result<bool, String> {
     providers::delete_provider(&state, request)
+}
+
+#[tauri::command]
+pub fn undo_note(state: State<'_, AppState>, request: NoteIdRequest) -> Result<bool, String> {
+    if request.note_id.trim().is_empty() {
+        return Err("A note ID is required".to_string());
+    }
+    state
+        .storage
+        .lock()
+        .map_err(|_| "Local storage is unavailable".to_string())?
+        .soft_delete_note_with_audit(&request.note_id)
+        .map_err(|_| "Unable to undo the local note".to_string())
 }
 
 #[tauri::command]

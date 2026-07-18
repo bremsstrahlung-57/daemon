@@ -9,18 +9,14 @@ use std::{path::{Path, PathBuf}, process::Stdio, time::Duration};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::{io::{AsyncRead, AsyncReadExt}, process::Command};
 
-const MAX_OUTPUT_BYTES: usize = 64 * 1024;
-const MAX_SUMMARY_BYTES: usize = 16 * 1024;
-const JOB_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+const MAX_RESULT_BYTES: usize = 64 * 1024;
+const MAX_DIAGNOSTIC_BYTES: usize = 4 * 1024;
+const DEFAULT_JOB_TIMEOUT_SECONDS: u64 = 3 * 60;
+const MAX_JOB_TIMEOUT_SECONDS: u64 = 60 * 60;
 
 #[derive(Serialize)]
 struct JobResult {
     summary: String,
-    changed_files: Vec<String>,
-    diff_stat: String,
-    stdout: String,
-    stderr: String,
-    output_truncated: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -39,27 +35,12 @@ pub fn start_run_codex_task(
     if !state.repositories.was_described(&arguments.repo_id) {
         return Err("Describe the allowlisted repository before starting a task".to_string());
     }
-    ensure_clean(&repository)?;
-    let worktree_root = app
-        .path()
-        .app_data_dir()
-        .map_err(|_| "The application data directory is unavailable".to_string())?
-        .join("worktrees");
-    std::fs::create_dir_all(&worktree_root)
-        .map_err(|_| "Unable to prepare the isolated worktree directory".to_string())?;
-    let worktree_root = std::fs::canonicalize(worktree_root)
-        .map_err(|_| "Unable to secure the isolated worktree directory".to_string())?;
-    let job_id = new_id();
-    let workspace = worktree_root.join(&job_id);
-    if !workspace.starts_with(&worktree_root) {
-        return Err("The isolated worktree path is unsafe".to_string());
-    }
     let job = JobRecord {
-        id: job_id.clone(),
+        id: new_id(),
         proposal_id: proposal.id.clone(),
         kind: "run_codex_task".to_string(),
         status: "preparing".to_string(),
-        workspace_path: Some(workspace.to_string_lossy().to_string()),
+        workspace_path: Some(repository.to_string_lossy().to_string()),
         started_at: Some(now_ms()),
         completed_at: None,
         result_json: None,
@@ -74,7 +55,7 @@ pub fn start_run_codex_task(
             return Ok(existing);
         }
         if storage.active_job().map_err(|_| "Unable to check active tasks".to_string())?.is_some() {
-            return Err("Only one isolated coding task can run at a time".to_string());
+            return Err("Only one Codex task can run at a time".to_string());
         }
         storage.insert_job(&job).map_err(|_| "Unable to save the task before it starts".to_string())?;
         storage.append_audit("job", &job.id, "prepared", None).map_err(|_| "Unable to write the job audit".to_string())?;
@@ -82,7 +63,7 @@ pub fn start_run_codex_task(
     let app = app.clone();
     let task_job = job.clone();
     tauri::async_runtime::spawn(async move {
-        run_job(app, task_job, repository, workspace, worktree_root, arguments).await;
+        run_job(app, task_job, repository, arguments).await;
     });
     Ok(job)
 }
@@ -91,17 +72,15 @@ async fn run_job(
     app: AppHandle,
     job: JobRecord,
     repository: PathBuf,
-    workspace: PathBuf,
-    worktree_root: PathBuf,
     arguments: RunCodexTaskArguments,
 ) {
-    let branch = format!("daemon/{}", job.id);
-    let workspace_text = workspace.to_string_lossy().to_string();
-    let branch_args = ["worktree", "add", "-b", branch.as_str(), &workspace_text, "HEAD"];
-    if let Err(error) = run_git(&repository, &branch_args).await {
-        finish_failure(&app, &job.id, error).await;
-        return;
-    }
+    let initial_snapshot = match repository_snapshot(&repository).await {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            finish_failure(&app, &job.id, error).await;
+            return;
+        }
+    };
     {
         let state = app.state::<AppState>();
         let storage = match state.storage.lock() { Ok(storage) => storage, Err(_) => return };
@@ -111,24 +90,20 @@ async fn run_job(
         let _ = storage.append_audit("job", &job.id, "started", None);
         let _ = app.emit(JOB_STARTED, JobLifecyclePayload { job: running_job });
     }
-    let result_path = worktree_root.join(format!("{}.last-message.txt", job.id));
-    let outcome = run_codex(&workspace, &result_path, &arguments).await;
-    let (status, result_json, error) = match outcome {
-        Ok((stdout, stderr, truncated)) => {
-            let summary = read_bounded_file(&result_path, MAX_SUMMARY_BYTES).await.unwrap_or_default();
-            let changed_files = run_git(&workspace, &["diff", "--name-only"])
-                .await
-                .unwrap_or_default()
-                .lines()
-                .take(100)
-                .map(str::to_string)
-                .collect();
-            let diff_stat = run_git(&workspace, &["diff", "--stat"])
-                .await
-                .unwrap_or_default();
-            let result = JobResult { summary, changed_files, diff_stat, stdout, stderr, output_truncated: truncated };
-            ("completed", serde_json::to_string(&result).ok(), None)
-        }
+    let (status, result_json, error) = match run_codex(&repository, &arguments.objective).await {
+        Ok(summary) => match repository_snapshot(&repository).await {
+            Ok(snapshot) if snapshot == initial_snapshot => (
+                "completed",
+                serde_json::to_string(&JobResult { summary }).ok(),
+                None,
+            ),
+            Ok(_) => (
+                "failed",
+                None,
+                Some("The allowlisted repository changed during the read-only Codex run".to_string()),
+            ),
+            Err(error) => ("failed", None, Some(error)),
+        },
         Err(error) => ("failed", None, Some(error)),
     };
     let state = app.state::<AppState>();
@@ -151,73 +126,73 @@ async fn finish_failure(app: &AppHandle, job_id: &str, error: String) {
     };
 }
 
-async fn run_codex(
-    workspace: &Path,
-    result_path: &Path,
-    arguments: &RunCodexTaskArguments,
-) -> Result<(String, String, bool), String> {
-    let executable = std::env::var_os("DAEMON_CODEX_EXECUTABLE").unwrap_or_else(|| {
-        let bundled = std::path::PathBuf::from(r"C:\Program Files\nodejs\codex.cmd");
-        if bundled.is_file() { bundled.into_os_string() } else { "codex".into() }
-    });
-    let prompt = format!(
-        "Objective: {}\nAcceptance criteria: {}\nLikely files: {}\n\nWork only in this isolated repository worktree. Do not access network resources or modify files outside it. Return a concise final summary.",
-        arguments.objective,
-        arguments.acceptance_criteria,
-        arguments.likely_files.join(", "),
-    );
-    let mut child = Command::new(executable)
+async fn run_codex(repository: &Path, objective: &str) -> Result<String, String> {
+    let mut command = Command::new("codex");
+    command
         .arg("exec")
-        .arg("--cd")
-        .arg(workspace)
         .arg("--sandbox")
-        .arg("workspace-write")
-        .arg("--ask-for-approval")
-        .arg("never")
-        .arg("--json")
-        .arg("--output-last-message")
-        .arg(result_path)
-        .arg("-c")
-        .arg("web_search=\"cached\"")
-        .arg(prompt)
-        .current_dir(workspace)
-        .env_remove("OPENAI_API_KEY")
+        .arg("read-only")
+        .arg(objective)
+        .current_dir(repository);
+    run_codex_command(command, job_timeout()).await
+}
+
+async fn run_codex_command(
+    mut command: Command,
+    timeout: Duration,
+) -> Result<String, String> {
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|_| "Codex could not start from the Rust-owned executable setting".to_string())?;
+        .map_err(|_| "Codex could not start from the system PATH".to_string())?;
     let stdout = child.stdout.take().ok_or_else(|| "Codex stdout was unavailable".to_string())?;
     let stderr = child.stderr.take().ok_or_else(|| "Codex stderr was unavailable".to_string())?;
-    let stdout_task = tokio::spawn(read_bounded(stdout, MAX_OUTPUT_BYTES));
-    let stderr_task = tokio::spawn(read_bounded(stderr, MAX_OUTPUT_BYTES));
-    let status = match tokio::time::timeout(JOB_TIMEOUT, child.wait()).await {
-        Ok(Ok(status)) => status,
+    let stdout_task = tokio::spawn(read_bounded(stdout, MAX_RESULT_BYTES));
+    let stderr_task = tokio::spawn(read_bounded(stderr, MAX_DIAGNOSTIC_BYTES));
+    let status = match tokio::time::timeout(timeout, child.wait()).await {
+        Ok(Ok(status)) => Some(status),
         Ok(Err(_)) => return Err("Codex did not finish cleanly".to_string()),
         Err(_) => {
             let _ = child.kill().await;
-            return Err("Codex exceeded the 20 minute task timeout".to_string());
+            let _ = child.wait().await;
+            None
         }
     };
-    let (stdout, stdout_cut) = stdout_task.await.unwrap_or_default();
-    let (stderr, stderr_cut) = stderr_task.await.unwrap_or_default();
+    let (stdout, _) = stdout_task.await.unwrap_or_default();
+    let (stderr, _) = stderr_task.await.unwrap_or_default();
+    let Some(status) = status else {
+        return Err(format!(
+            "Codex exceeded the {} second read-only timeout",
+            timeout.as_secs(),
+        ));
+    };
     if !status.success() {
-        return Err(format!("Codex exited without completing the task: {}", limit(&stderr, 600)));
+        let code = status.code().map_or_else(|| "unknown".to_string(), |code| code.to_string());
+        let excerpt = limit(stderr.trim(), 600);
+        return Err(if excerpt.is_empty() {
+            format!("Codex exited with code {code}")
+        } else {
+            format!("Codex exited with code {code}: {excerpt}")
+        });
     }
-    Ok((stdout, stderr, stdout_cut || stderr_cut))
+    Ok(stdout)
 }
 
-fn ensure_clean(repository: &Path) -> Result<(), String> {
-    let output = std::process::Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(repository)
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|_| "Unable to inspect the allowlisted repository state".to_string())?;
-    if !output.status.success() || !output.stdout.is_empty() {
-        return Err("The allowlisted repository must be clean before an isolated task starts".to_string());
-    }
-    Ok(())
+fn job_timeout() -> Duration {
+    let seconds = std::env::var("DAEMON_CODEX_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|seconds| (1..=MAX_JOB_TIMEOUT_SECONDS).contains(seconds))
+        .unwrap_or(DEFAULT_JOB_TIMEOUT_SECONDS);
+    Duration::from_secs(seconds)
+}
+
+async fn repository_snapshot(repository: &Path) -> Result<String, String> {
+    let status = run_git(repository, &["status", "--porcelain=v1", "--untracked-files=all"]).await?;
+    let diff = run_git(repository, &["diff", "--no-ext-diff", "--binary", "HEAD"]).await?;
+    Ok(format!("{status}\n--daemon-diff-boundary--\n{diff}"))
 }
 
 async fn run_git(path: &Path, arguments: &[&str]) -> Result<String, String> {
@@ -227,9 +202,9 @@ async fn run_git(path: &Path, arguments: &[&str]) -> Result<String, String> {
         .stdin(Stdio::null())
         .output()
         .await
-        .map_err(|_| "The isolated Git worktree command could not start".to_string())?;
-    if !output.status.success() || output.stdout.len() > MAX_OUTPUT_BYTES {
-        return Err("The isolated Git worktree command failed".to_string());
+        .map_err(|_| "The repository state check could not start".to_string())?;
+    if !output.status.success() || output.stdout.len() > MAX_RESULT_BYTES {
+        return Err("The repository state check failed".to_string());
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
@@ -248,11 +223,36 @@ async fn read_bounded<R: AsyncRead + Unpin>(mut reader: R, maximum: usize) -> (S
     (String::from_utf8_lossy(&bytes).into_owned(), truncated)
 }
 
-async fn read_bounded_file(path: &Path, maximum: usize) -> Option<String> {
-    let bytes = tokio::fs::read(path).await.ok()?;
-    Some(String::from_utf8_lossy(&bytes[..bytes.len().min(maximum)]).into_owned())
-}
-
 fn limit(value: &str, maximum: usize) -> String {
     value.chars().take(maximum).collect()
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn reports_a_bounded_stderr_excerpt_on_nonzero_exit() {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "echo synthetic failure 1>&2 & exit /B 7"]);
+
+        let error = run_codex_command(command, Duration::from_secs(1))
+            .await
+            .expect_err("nonzero child should fail the job");
+
+        assert!(error.contains("code 7"));
+        assert!(error.contains("synthetic failure"));
+    }
+
+    #[tokio::test]
+    async fn kills_a_child_that_exceeds_the_timeout() {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "ping -n 10 127.0.0.1 > NUL"]);
+
+        let error = run_codex_command(command, Duration::from_secs(1))
+            .await
+            .expect_err("long-running child should time out");
+
+        assert_eq!(error, "Codex exceeded the 1 second read-only timeout");
+    }
 }

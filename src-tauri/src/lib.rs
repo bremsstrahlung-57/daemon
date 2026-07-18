@@ -56,7 +56,6 @@ pub fn run() {
                 .inner_size(100.0, 100.0)
                 .min_inner_size(1.0, 1.0)
                 .build()?;
-
             let summon = MenuItemBuilder::with_id("daemon_summon", "Summon daemon").build(app)?;
             let dismiss = MenuItemBuilder::with_id("daemon_dismiss", "Dismiss").build(app)?;
             let quit = MenuItemBuilder::with_id("daemon_quit", "Quit").build(app)?;
@@ -85,16 +84,19 @@ pub fn run() {
             Ok(())
         })
         .on_menu_event(|app, event| {
-            let section = match event.id().as_ref() {
-                "daemon_toolbox_providers" => Some("providers"),
-                "daemon_toolbox_keys" => Some("keys"),
-                "daemon_toolbox_models" => Some("models"),
-                "daemon_toolbox_settings" => Some("settings"),
-                "daemon_toolbox_about" => Some("about"),
-                _ => None,
-            };
-            if let Some(section) = section {
-                let _ = app.emit_to(DAEMON_WINDOW, events::TOOLBOX_OPEN, section);
+            match event.id().as_ref() {
+                "daemon_toolbox_settings" => {
+                    let _ = app.emit_to(DAEMON_WINDOW, events::TOOLBOX_OPEN, "settings");
+                }
+                "daemon_toolbox_about" => {
+                    let _ = app.emit_to(DAEMON_WINDOW, events::TOOLBOX_OPEN, "about");
+                }
+                "daemon_toolbox_dismiss" => dismiss_daemon(app),
+                "daemon_toolbox_quit" => {
+                    app.cleanup_before_exit();
+                    app.exit(0);
+                }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -107,6 +109,7 @@ pub fn run() {
             commands::select_provider,
             commands::delete_provider_key,
             commands::delete_provider,
+            commands::undo_note,
             commands::create_model_response,
             commands::validate_tool_call,
             commands::describe_repo,

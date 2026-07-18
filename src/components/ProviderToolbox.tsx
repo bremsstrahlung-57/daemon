@@ -8,7 +8,7 @@ import {
   type Provider,
 } from "../lib/daemon";
 
-export type ToolboxSection = "providers" | "keys" | "models" | "settings" | "about";
+export type ToolboxSection = "settings" | "about";
 
 type ProviderToolboxProps = {
   section: ToolboxSection;
@@ -81,7 +81,7 @@ function ProviderToolbox({ section, onClose }: ProviderToolboxProps) {
   return (
     <section className="toolbox-card" aria-label="Daemon toolbox">
       <header>
-        <span>{section === "about" ? "Daemon" : section}</span>
+        <span>{section === "about" ? "Daemon" : "Settings"}</span>
         <button type="button" onClick={onClose} aria-label="Close toolbox">×</button>
       </header>
       {section === "about" ? (
@@ -89,29 +89,20 @@ function ProviderToolbox({ section, onClose }: ProviderToolboxProps) {
           <p>Daemon v0.1.0 · Local companion · OpenAI-compatible chat endpoints.</p>
           <a href="https://platform.openai.com/docs/api-reference/chat" target="_blank" rel="noreferrer">Chat Completions reference</a>
         </>
-      ) : section === "settings" ? (
-        <p>Conversation history stays local. Provider keys are stored in the OS credential manager.</p>
       ) : (
         <>
+          <p className="toolbox-description">Configure the AI provider, model, and API key here. Keys stay in the OS credential manager.</p>
           <div className="provider-list">
             {providers.map((provider) => (
               <div key={provider.id} className="provider-row">
-                <button type="button" onClick={() => void activate(provider)}>
+                <button type="button" className="provider-select" onClick={() => void activate(provider)}>
                   {provider.is_active ? "●" : "○"} {provider.name} · {provider.model}
                 </button>
-                {section === "keys" ? (
-                  <span>
-                    <button type="button" onClick={() => edit(provider)}>Set key</button>
-                    <button type="button" onClick={() => void clearKey(provider)}>
-                      {provider.api_key_configured ? "Remove" : "No key"}
-                    </button>
-                  </span>
-                ) : (
-                  <span>
-                    <button type="button" onClick={() => edit(provider)}>Edit</button>
-                    <button type="button" onClick={() => void remove(provider)}>Remove</button>
-                  </span>
-                )}
+                <span className="provider-actions">
+                  <button type="button" onClick={() => edit(provider)}>Edit</button>
+                  <button type="button" disabled={!provider.api_key_configured} onClick={() => void clearKey(provider)}>Clear key</button>
+                  <button type="button" onClick={() => void remove(provider)}>Remove</button>
+                </span>
               </div>
             ))}
           </div>

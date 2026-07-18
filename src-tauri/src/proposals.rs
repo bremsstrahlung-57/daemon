@@ -16,9 +16,6 @@ pub struct CreateRunCodexProposalRequest {
     pub conversation_id: String,
     pub repo_id: String,
     pub objective: String,
-    pub acceptance_criteria: String,
-    #[serde(default)]
-    pub likely_files: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -58,8 +55,6 @@ pub fn create_run_codex_proposal(
         arguments: serde_json::json!({
             "repo_id": request.repo_id,
             "objective": request.objective,
-            "acceptance_criteria": request.acceptance_criteria,
-            "likely_files": request.likely_files,
         }),
     })?;
     let ToolArguments::RunCodexTask(arguments) = validated.arguments else {

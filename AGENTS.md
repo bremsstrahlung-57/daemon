@@ -15,7 +15,7 @@
 
 ## Agent Execution Policy
 
-Do not run `bun run dev`, `bun run tauri dev`, `bun run build`, `bun run tauri build`, `cargo check`, `cargo fmt`, or any other build/test/dev command on your own initiative. Propose the command and wait for explicit confirmation before running it. This applies even when a change looks safe or the task seems to call for verification. If you need to confirm something compiles, say so and ask; don't just run it.
+Do not run `bun run dev`, `bun run tauri dev`, `bun run build`, `bun run tauri build`, `cargo check`, `cargo fmt`, or any other build/dev command on your own initiative. Propose the command and wait for explicit confirmation before running it. This applies even when a change looks safe or the task seems to call for verification. If you need to confirm something compiles, say so and ask; don't just run it.
 
 ## Project Structure & Module Organization
 
