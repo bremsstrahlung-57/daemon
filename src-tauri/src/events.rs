@@ -8,3 +8,7 @@ pub const JOB_STARTED: &str = "daemon://job-started";
 pub const JOB_COMPLETED: &str = "daemon://job-completed";
 pub const JOB_FAILED: &str = "daemon://job-failed";
 pub const TOOLBOX_OPEN: &str = "daemon://toolbox-open";
+pub const SCREEN_OBSERVATION_CREATED: &str = "daemon://screen-observation-created";
+pub const SCREEN_AWARE_STATUS: &str = "daemon://screen-aware-status";
+pub const SCREEN_RESPONSE_STARTED: &str = "daemon://screen-response-started";
+pub const SCREEN_RESPONSE_FAILED: &str = "daemon://screen-response-failed";

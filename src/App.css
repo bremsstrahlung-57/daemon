@@ -431,6 +431,63 @@ button {
     font-size: 11px;
 }
 
+.screen-aware-settings {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(215, 180, 255, 0.2);
+}
+
+.screen-aware-settings summary {
+    cursor: pointer;
+    color: #f5edff;
+}
+
+.screen-aware-settings > p {
+    margin: 8px 0 0;
+    color: rgba(247, 244, 235, 0.76);
+    font-size: 10px;
+    line-height: 1.4;
+}
+
+.screen-aware-form {
+    display: grid;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.screen-aware-form > label {
+    display: grid;
+    gap: 5px;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    color: rgba(247, 244, 235, 0.84);
+    border: 0;
+    font-size: 10px;
+}
+
+.screen-aware-form select,
+.screen-aware-form input[type="number"] {
+    min-width: 0;
+    padding: 6px 7px;
+    color: inherit;
+    border: 1px solid rgba(215, 180, 255, 0.28);
+    border-radius: 3px;
+    background: rgba(30, 12, 55, 0.35);
+    font: inherit;
+}
+
+.screen-aware-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+}
+
+.screen-aware-actions button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
 .choice-button,
 .dismiss-button {
     border: 1px solid rgba(255, 255, 255, 0.14);

@@ -7,11 +7,12 @@ use crate::{
         CreateRunCodexProposalRequest, ProposalApproval, ResolveProposalRequest,
     },
     providers::{self, ProviderIdRequest, ProviderView, SaveProviderRequest},
+    screen_aware::{capture_and_store, validate_settings},
     state::AppState,
     tools::{DescribeRepoRequest, ProposedToolCall, RepositoryMetadata, ValidatedToolCall},
 };
 use serde::{Deserialize, Serialize};
-use tauri::{menu::{ContextMenu, Menu, MenuItemBuilder}, AppHandle, State, Window};
+use tauri::{menu::{ContextMenu, Menu, MenuItemBuilder}, AppHandle, Manager, State, Window};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct AuthStatus {
@@ -22,6 +23,12 @@ pub struct AuthStatus {
 #[serde(deny_unknown_fields)]
 pub struct NoteIdRequest {
     pub note_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SaveScreenAwareSettingsRequest {
+    pub interval_seconds: Option<i64>,
 }
 
 #[tauri::command]
@@ -95,6 +102,57 @@ pub fn undo_note(state: State<'_, AppState>, request: NoteIdRequest) -> Result<b
         .map_err(|_| "Local storage is unavailable".to_string())?
         .soft_delete_note_with_audit(&request.note_id)
         .map_err(|_| "Unable to undo the local note".to_string())
+}
+
+#[tauri::command]
+pub fn get_screen_aware_settings(
+    state: State<'_, AppState>,
+) -> Result<crate::storage::ScreenAwareSettingsRecord, String> {
+    state
+        .storage
+        .lock()
+        .map_err(|_| "Local storage is unavailable".to_string())?
+        .screen_aware_settings()
+        .map_err(|_| "Unable to load Screen Aware settings".to_string())
+}
+
+#[tauri::command]
+pub fn save_screen_aware_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: SaveScreenAwareSettingsRequest,
+) -> Result<crate::storage::ScreenAwareSettingsRecord, String> {
+    validate_settings(request.interval_seconds)?;
+    let settings = state
+        .storage
+        .lock()
+        .map_err(|_| "Local storage is unavailable".to_string())?
+        .save_screen_aware_settings(request.interval_seconds)
+        .map_err(|_| "Unable to save Screen Aware settings".to_string())?;
+    state
+        .screen_aware
+        .restart_monitor(app.clone(), settings.interval_seconds);
+    Ok(settings)
+}
+
+#[tauri::command]
+pub async fn capture_screen_observation(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<crate::storage::ScreenObservationRecord, String> {
+    let observation = capture_and_store(&app, &state, "manual").await?;
+    let response_app = app.clone();
+    let response_observation = observation.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = response_app.state::<AppState>();
+        let _ = crate::openai::turns::respond_to_screen_observation(
+            &response_app,
+            &state,
+            &response_observation,
+        )
+        .await;
+    });
+    Ok(observation)
 }
 
 #[tauri::command]

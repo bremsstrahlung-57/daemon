@@ -8,6 +8,7 @@ pub enum ToolName {
     SearchMemories,
     SearchNotes,
     ShowMascotReaction,
+    CaptureScreen,
     DescribeRepo,
     RunCodexTask,
 }
@@ -76,6 +77,10 @@ pub struct ShowMascotReactionArguments {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct CaptureScreenArguments {}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct DescribeRepoArguments {
     pub repo_id: String,
 }
@@ -100,6 +105,8 @@ pub enum ToolArguments {
     SearchNotes(SearchLocalArguments),
     #[serde(rename = "show_mascot_reaction")]
     ShowMascotReaction(ShowMascotReactionArguments),
+    #[serde(rename = "capture_screen")]
+    CaptureScreen(CaptureScreenArguments),
     #[serde(rename = "describe_repo")]
     DescribeRepo(DescribeRepoArguments),
     #[serde(rename = "run_codex_task")]
@@ -170,6 +177,16 @@ impl ToolRegistry {
                 )?;
                 (
                     ToolArguments::ShowMascotReaction(arguments),
+                    ToolPolicy {
+                        approval_policy: ApprovalPolicy::Automatic,
+                        data_exposure: DataExposure::LocalOnly,
+                    },
+                )
+            }
+            ToolName::CaptureScreen => {
+                let arguments = parse::<CaptureScreenArguments>(call.arguments, "capture_screen")?;
+                (
+                    ToolArguments::CaptureScreen(arguments),
                     ToolPolicy {
                         approval_policy: ApprovalPolicy::Automatic,
                         data_exposure: DataExposure::LocalOnly,
@@ -332,5 +349,17 @@ mod tests {
                 arguments: serde_json::json!({ "query": "" }),
             })
             .is_ok());
+        assert!(registry
+            .validate(ProposedToolCall {
+                tool_name: ToolName::CaptureScreen,
+                arguments: serde_json::json!({}),
+            })
+            .is_ok());
+        assert!(registry
+            .validate(ProposedToolCall {
+                tool_name: ToolName::CaptureScreen,
+                arguments: serde_json::json!({ "source": "forged" }),
+            })
+            .is_err());
     }
 }

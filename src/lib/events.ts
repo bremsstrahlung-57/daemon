@@ -13,6 +13,10 @@ export type ProposalResolvedPayload = {
 export type JobLifecyclePayload = { job: JobRecord };
 export type NoteCreatedPayload = { id: string; content: string };
 export type MascotReactionPayload = { reaction: "happy" | "not_happy" };
+export type ScreenAwareStatusPayload = {
+  status: "capturing" | "ready" | "error";
+  message: string;
+};
 
 export const onMessageReady = (
   handler: (payload: MessageReadyPayload) => void,
@@ -62,5 +66,23 @@ export const onJobCompleted = (
 export const onJobFailed = (
   handler: (payload: JobLifecyclePayload) => void,
 ): Promise<UnlistenFn> => listen<JobLifecyclePayload>("daemon://job-failed", (event) => {
+  handler(event.payload);
+});
+
+export const onScreenAwareStatus = (
+  handler: (payload: ScreenAwareStatusPayload) => void,
+): Promise<UnlistenFn> => listen<ScreenAwareStatusPayload>("daemon://screen-aware-status", (event) => {
+  handler(event.payload);
+});
+
+export const onScreenResponseStarted = (
+  handler: () => void,
+): Promise<UnlistenFn> => listen<string>("daemon://screen-response-started", () => {
+  handler();
+});
+
+export const onScreenResponseFailed = (
+  handler: (message: string) => void,
+): Promise<UnlistenFn> => listen<string>("daemon://screen-response-failed", (event) => {
   handler(event.payload);
 });

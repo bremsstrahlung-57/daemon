@@ -26,5 +26,12 @@ keyring = { version = "3", features = ["windows-native"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 sha2 = "0.10"
-tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "time"] }
 uuid = { version = "1", features = ["v4"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+half = "2.6"
+ort = { version = "=2.0.0-rc.9", features = ["half"] }
+ort-sys = "=2.0.0-rc.9"
+tar = "0.4"
+tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
+xcap = "0.9"

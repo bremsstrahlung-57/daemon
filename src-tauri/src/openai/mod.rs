@@ -1,7 +1,7 @@
 mod types;
 pub mod turns;
 
-pub use types::{create_memory_tool, create_note_tool, search_memories_tool, search_notes_tool, show_mascot_reaction_tool, ChatCompletionFunctionTool, ChatCompletionMessage, ChatCompletionRequest, ChatCompletionResponse, ChatCompletionToolCall, ModelTurnRequest, ResponsesApiResponse, ResponsesInputContent, ResponsesInputItem, ResponsesRequest, TurnMessage, TurnRole};
+pub use types::{capture_screen_tool, create_memory_tool, create_note_tool, search_memories_tool, search_notes_tool, show_mascot_reaction_tool, ChatCompletionFunctionTool, ChatCompletionMessage, ChatCompletionRequest, ChatCompletionResponse, ChatCompletionToolCall, ModelTurnRequest, ResponsesApiResponse, ResponsesInputContent, ResponsesInputItem, ResponsesRequest, TurnMessage, TurnRole};
 
 use crate::{secrets::SecretStore, storage::ProviderRecord};
 use reqwest::Client;

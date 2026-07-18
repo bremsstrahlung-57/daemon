@@ -42,6 +42,21 @@ pub struct MemoryRecord {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct ScreenObservationRecord {
+    pub id: String,
+    pub timestamp: i64,
+    pub description: String,
+    pub source: String,
+    pub created_at: i64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ScreenAwareSettingsRecord {
+    pub interval_seconds: Option<i64>,
+    pub updated_at: i64,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct ProposalRecord {
     pub id: String,
     pub conversation_id: String,
@@ -138,6 +153,19 @@ impl Storage {
                  source_message_id TEXT NOT NULL REFERENCES messages(id),
                  created_at INTEGER NOT NULL
              );
+             CREATE TABLE IF NOT EXISTS screen_observations (
+                 id TEXT PRIMARY KEY,
+                 timestamp INTEGER NOT NULL,
+                 description TEXT NOT NULL,
+                 source TEXT NOT NULL,
+                 created_at INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS screen_aware_settings (
+                 id INTEGER PRIMARY KEY CHECK (id = 1),
+                 interval_seconds INTEGER CHECK (interval_seconds IS NULL OR interval_seconds > 0),
+                 capture_trigger TEXT NOT NULL CHECK (capture_trigger IN ('single', 'double')),
+                 updated_at INTEGER NOT NULL
+             );
              CREATE TABLE IF NOT EXISTS proposals (
                  id TEXT PRIMARY KEY,
                  conversation_id TEXT NOT NULL REFERENCES conversations(id),
@@ -183,6 +211,7 @@ impl Storage {
              CREATE INDEX IF NOT EXISTS messages_conversation_idx ON messages(conversation_id, created_at);
              CREATE INDEX IF NOT EXISTS notes_source_idx ON notes(source_message_id, created_at);
              CREATE INDEX IF NOT EXISTS memories_created_idx ON memories(created_at);
+             CREATE INDEX IF NOT EXISTS screen_observations_timestamp_idx ON screen_observations(timestamp);
              CREATE INDEX IF NOT EXISTS proposals_status_idx ON proposals(status, created_at);
              CREATE INDEX IF NOT EXISTS jobs_status_idx ON jobs(status, completed_at);
              CREATE INDEX IF NOT EXISTS audit_entity_idx ON audit_events(entity_type, entity_id, created_at);",
@@ -201,6 +230,22 @@ impl Storage {
             params![record.id, record.created_at, record.updated_at],
         )?;
         Ok(record)
+    }
+
+    pub fn latest_conversation(&self) -> SqlResult<Option<ConversationRecord>> {
+        self.connection
+            .query_row(
+                "SELECT id, created_at, updated_at FROM conversations ORDER BY updated_at DESC LIMIT 1",
+                [],
+                |row| {
+                    Ok(ConversationRecord {
+                        id: row.get(0)?,
+                        created_at: row.get(1)?,
+                        updated_at: row.get(2)?,
+                    })
+                },
+            )
+            .optional()
     }
 
     pub fn append_message(
@@ -317,6 +362,101 @@ impl Storage {
             })?
             .collect::<SqlResult<Vec<_>>>()?;
         Ok(rank_records(memories, query, limit, |memory| &memory.content))
+    }
+
+    pub fn screen_aware_settings(&self) -> SqlResult<ScreenAwareSettingsRecord> {
+        self.connection
+            .query_row(
+                "SELECT interval_seconds, updated_at
+                 FROM screen_aware_settings WHERE id = 1",
+                [],
+                |row| {
+                    Ok(ScreenAwareSettingsRecord {
+                        interval_seconds: row.get(0)?,
+                        updated_at: row.get(1)?,
+                    })
+                },
+            )
+            .optional()
+            .map(|settings| {
+                settings.unwrap_or(ScreenAwareSettingsRecord {
+                    interval_seconds: None,
+                    updated_at: 0,
+                })
+            })
+    }
+
+    pub fn save_screen_aware_settings(
+        &self,
+        interval_seconds: Option<i64>,
+    ) -> SqlResult<ScreenAwareSettingsRecord> {
+        let settings = ScreenAwareSettingsRecord {
+            interval_seconds,
+            updated_at: now_ms(),
+        };
+        self.connection.execute(
+            "INSERT INTO screen_aware_settings (id, interval_seconds, capture_trigger, updated_at)
+             VALUES (1, ?1, 'single', ?2)
+             ON CONFLICT(id) DO UPDATE SET
+                 interval_seconds = excluded.interval_seconds,
+                 updated_at = excluded.updated_at",
+            params![
+                settings.interval_seconds,
+                settings.updated_at,
+            ],
+        )?;
+        Ok(settings)
+    }
+
+    pub fn insert_screen_observation(
+        &self,
+        description: &str,
+        source: &str,
+    ) -> SqlResult<ScreenObservationRecord> {
+        let timestamp = now_ms();
+        let observation = ScreenObservationRecord {
+            id: new_id(),
+            timestamp,
+            description: description.to_string(),
+            source: source.to_string(),
+            created_at: timestamp,
+        };
+        self.connection.execute(
+            "INSERT INTO screen_observations (id, timestamp, description, source, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                observation.id,
+                observation.timestamp,
+                observation.description,
+                observation.source,
+                observation.created_at,
+            ],
+        )?;
+        Ok(observation)
+    }
+
+    pub fn recent_screen_observations(
+        &self,
+        created_after: i64,
+        limit: usize,
+    ) -> SqlResult<Vec<ScreenObservationRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, timestamp, description, source, created_at
+             FROM screen_observations
+             WHERE timestamp >= ?1
+             ORDER BY timestamp DESC
+             LIMIT ?2",
+        )?;
+        let rows = statement.query_map(params![created_after, limit as i64], |row| {
+            Ok(ScreenObservationRecord {
+                id: row.get(0)?,
+                timestamp: row.get(1)?,
+                description: row.get(2)?,
+                source: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?;
+        rows.collect()
     }
 
     pub fn insert_note_with_audit(
@@ -1058,6 +1198,45 @@ mod tests {
         assert!(!storage
             .soft_delete_note_with_audit(&note.id)
             .expect("duplicate deletion should be safe"));
+        drop(storage);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn screen_observations_store_text_only() {
+        let path = env::temp_dir().join(format!("daemon-screen-{}.sqlite3", Uuid::new_v4()));
+        let storage = Storage::open(&path).expect("temporary database should open");
+        assert_eq!(
+            storage
+                .screen_aware_settings()
+                .expect("default screen settings should load")
+                .interval_seconds,
+            None
+        );
+        let settings = storage
+            .save_screen_aware_settings(Some(30))
+            .expect("screen settings should save");
+        assert_eq!(settings.interval_seconds, Some(30));
+        let observation = storage
+            .insert_screen_observation("A code editor is open.", "automatic")
+            .expect("screen description should save");
+        let recent = storage
+            .recent_screen_observations(0, 1)
+            .expect("screen descriptions should load");
+        let schema: String = storage
+            .connection
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'screen_observations'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("screen observation schema should exist");
+
+        assert_eq!(recent[0].id, observation.id);
+        assert_eq!(recent[0].description, "A code editor is open.");
+        assert_eq!(recent[0].source, "automatic");
+        assert_eq!(observation.timestamp, observation.created_at);
+        assert!(!schema.to_ascii_lowercase().contains("blob"));
         drop(storage);
         let _ = fs::remove_file(path);
     }

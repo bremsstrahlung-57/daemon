@@ -24,6 +24,9 @@ import {
   onMascotReaction,
   onMessageReady,
   onNoteCreated,
+  onScreenAwareStatus,
+  onScreenResponseFailed,
+  onScreenResponseStarted,
 } from "./lib/events";
 import "./App.css";
 
@@ -394,6 +397,47 @@ function App() {
     });
 
     void onNoteCreated(handleNoteCreated).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+      } else {
+        cleanups.push(unlisten);
+      }
+    });
+
+    void onScreenAwareStatus((payload) => {
+      if (payload.status !== "capturing") {
+        return;
+      }
+      clearTimers();
+      setLine("");
+      setPhase("thinking");
+    }).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+      } else {
+        cleanups.push(unlisten);
+      }
+    });
+
+    void onScreenResponseStarted(() => {
+      clearTimers();
+      setLine("");
+      setPhase("thinking");
+    }).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+      } else {
+        cleanups.push(unlisten);
+      }
+    });
+
+    void onScreenResponseFailed((message) => {
+      clearTimers();
+      setLine(message);
+      setMessageKey((key) => key + 1);
+      setPhase("failed");
+      setTimer(() => setPhase("idle"), visibleDuration(message));
+    }).then((unlisten) => {
       if (disposed) {
         unlisten();
       } else {

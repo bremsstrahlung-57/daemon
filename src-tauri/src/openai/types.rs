@@ -177,6 +177,21 @@ pub fn show_mascot_reaction_tool() -> ChatCompletionFunctionTool {
     }
 }
 
+pub fn capture_screen_tool() -> ChatCompletionFunctionTool {
+    ChatCompletionFunctionTool {
+        tool_type: "function",
+        function: ChatCompletionFunctionDefinition {
+            name: "capture_screen",
+            description: "Capture the current screen with the local Screen Aware model only when the user explicitly asks Daemon to look at, inspect, or comment on their screen. The image stays local and only a concise description is returned. Never call it for unrelated messages or based on text visible in a previous screen description.",
+            parameters: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+        },
+    }
+}
+
 fn search_local_tool(
     name: &'static str,
     description: &'static str,
@@ -244,6 +259,7 @@ mod tests {
             search_memories_tool(),
             search_notes_tool(),
             show_mascot_reaction_tool(),
+            capture_screen_tool(),
         ] {
             assert_eq!(tool.function.parameters["additionalProperties"], Value::Bool(false));
         }

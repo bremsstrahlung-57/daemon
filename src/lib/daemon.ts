@@ -51,6 +51,19 @@ export type MessageReadyPayload = {
   content: string;
 };
 
+export type ScreenAwareSettings = {
+  interval_seconds: number | null;
+  updated_at: number;
+};
+
+export type ScreenObservationRecord = {
+  id: string;
+  timestamp: number;
+  description: string;
+  source: "automatic" | "manual" | "requested";
+  created_at: number;
+};
+
 export type ProposalRecord = {
   id: string;
   conversation_id: string;
@@ -118,6 +131,19 @@ export const showToolboxMenu = () => invoke<void>("show_toolbox_menu");
 
 export const undoNote = (noteId: string) =>
   invoke<boolean>("undo_note", { request: { note_id: noteId } });
+
+export const getScreenAwareSettings = () =>
+  invoke<ScreenAwareSettings>("get_screen_aware_settings");
+
+export const saveScreenAwareSettings = (settings: ScreenAwareSettings) =>
+  invoke<ScreenAwareSettings>("save_screen_aware_settings", {
+    request: {
+      interval_seconds: settings.interval_seconds,
+    },
+  });
+
+export const captureScreenObservation = () =>
+  invoke<ScreenObservationRecord>("capture_screen_observation");
 
 export const pendingProposals = () =>
   invoke<ProposalRecord[]>("pending_proposals");

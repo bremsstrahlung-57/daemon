@@ -18,6 +18,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": [
+      "../model/moondream-0_5b-int4.bin"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

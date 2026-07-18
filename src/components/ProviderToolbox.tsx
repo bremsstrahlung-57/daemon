@@ -4,9 +4,14 @@ import {
   deleteProviderKey,
   listProviders,
   saveProvider,
+  getScreenAwareSettings,
+  captureScreenObservation,
+  saveScreenAwareSettings,
   selectProvider,
   type Provider,
+  type ScreenAwareSettings,
 } from "../lib/daemon";
+import { onScreenAwareStatus } from "../lib/events";
 
 export type ToolboxSection = "settings" | "about";
 
@@ -22,11 +27,29 @@ const EMPTY_PROVIDER = {
   apiKey: "",
 };
 
+type IntervalMode = "disabled" | "30" | "60" | "120" | "custom";
+
+const intervalModeFor = (seconds: number | null): IntervalMode => {
+  if (seconds === null) {
+    return "disabled";
+  }
+  return ([30, 60, 120] as number[]).includes(seconds)
+    ? `${seconds}` as IntervalMode
+    : "custom";
+};
+
 function ProviderToolbox({ section, onClose }: ProviderToolboxProps) {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [form, setForm] = useState(EMPTY_PROVIDER);
   const [editingId, setEditingId] = useState<string | undefined>();
   const [message, setMessage] = useState("");
+  const [screenSettings, setScreenSettings] = useState<ScreenAwareSettings>({
+    interval_seconds: null,
+    updated_at: 0,
+  });
+  const [intervalMode, setIntervalMode] = useState<IntervalMode>("disabled");
+  const [customInterval, setCustomInterval] = useState("");
+  const [screenMessage, setScreenMessage] = useState("");
 
   const refresh = async () => {
     try {
@@ -38,6 +61,31 @@ function ProviderToolbox({ section, onClose }: ProviderToolboxProps) {
 
   useEffect(() => {
     void refresh();
+    void getScreenAwareSettings().then((settings) => {
+      setScreenSettings(settings);
+      setIntervalMode(intervalModeFor(settings.interval_seconds));
+      if (intervalModeFor(settings.interval_seconds) === "custom") {
+        setCustomInterval(`${settings.interval_seconds}`);
+      }
+    }).catch(() => setScreenMessage("Couldn’t load Screen Aware settings."));
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void onScreenAwareStatus((payload) => {
+      setScreenMessage(payload.message);
+    }).then((cleanup) => {
+      if (disposed) {
+        cleanup();
+      } else {
+        unlisten = cleanup;
+      }
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, []);
 
   const save = async (event: FormEvent<HTMLFormElement>) => {
@@ -78,6 +126,38 @@ function ProviderToolbox({ section, onClose }: ProviderToolboxProps) {
     });
   };
 
+  const saveScreenAware = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const intervalSeconds = intervalMode === "disabled"
+      ? null
+      : intervalMode === "custom"
+        ? Number(customInterval)
+        : Number(intervalMode);
+    if (intervalSeconds !== null && (!Number.isInteger(intervalSeconds) || intervalSeconds < 1)) {
+      setScreenMessage("Enter a whole number of seconds.");
+      return;
+    }
+    try {
+      const settings = await saveScreenAwareSettings({
+        ...screenSettings,
+        interval_seconds: intervalSeconds,
+      });
+      setScreenSettings(settings);
+      setIntervalMode(intervalModeFor(settings.interval_seconds));
+      setScreenMessage(settings.interval_seconds === null ? "Screen Aware is disabled." : "Screen Aware settings saved.");
+    } catch (error) {
+      setScreenMessage(error instanceof Error ? error.message : "Couldn’t save Screen Aware settings.");
+    }
+  };
+
+  const captureScreenNow = async () => {
+    try {
+      await captureScreenObservation();
+    } catch (error) {
+      setScreenMessage(error instanceof Error ? error.message : "Couldn’t capture the screen.");
+    }
+  };
+
   return (
     <section className="toolbox-card" aria-label="Daemon toolbox">
       <header>
@@ -113,6 +193,41 @@ function ProviderToolbox({ section, onClose }: ProviderToolboxProps) {
             <input type="password" value={form.apiKey} onChange={(event) => setForm({ ...form, apiKey: event.target.value })} placeholder="API key" />
             <button type="submit">{editingId ? "Update provider" : "Save provider"}</button>
           </form>
+          <details className="screen-aware-settings">
+            <summary>Screen Aware</summary>
+            <p>Uses the bundled local Moondream2 model. Screenshots stay in memory and only descriptions are saved.</p>
+            <form className="screen-aware-form" onSubmit={saveScreenAware}>
+              <label>
+                Screenshot interval
+                <select value={intervalMode} onChange={(event) => setIntervalMode(event.target.value as IntervalMode)}>
+                  <option value="30">30 seconds</option>
+                  <option value="60">60 seconds</option>
+                  <option value="120">120 seconds</option>
+                  <option value="disabled">Disabled (No screenshots)</option>
+                  <option value="custom">Custom interval</option>
+                </select>
+              </label>
+              {intervalMode === "custom" && (
+                <label>
+                  Custom seconds
+                  <input
+                    min="1"
+                    inputMode="numeric"
+                    type="number"
+                    value={customInterval}
+                    onChange={(event) => setCustomInterval(event.target.value)}
+                  />
+                </label>
+              )}
+              <div className="screen-aware-actions">
+                <button type="submit">Save Screen Aware</button>
+                <button type="button" onClick={() => void captureScreenNow()}>
+                  Capture now
+                </button>
+              </div>
+            </form>
+            {screenMessage && <p className="toolbox-message">{screenMessage}</p>}
+          </details>
         </>
       )}
       {message && <p className="toolbox-message">{message}</p>}
