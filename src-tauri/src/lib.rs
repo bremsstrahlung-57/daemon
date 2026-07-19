@@ -21,25 +21,6 @@ const DAEMON_WINDOW: &str = "daemon";
 const TRIGGER_EVENT: &str = "daemon://trigger";
 const DISMISS_EVENT: &str = "daemon://dismiss";
 
-fn bundled_model_path(app: &tauri::App) -> std::io::Result<std::path::PathBuf> {
-    let name = "moondream-0_5b-int4.bin";
-    let resource_dir = app
-        .path()
-        .resource_dir()
-        .map_err(|error| std::io::Error::other(error.to_string()))?;
-    let candidates = [
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../model")
-            .join(name),
-        resource_dir.join("model").join(name),
-        resource_dir.join(name),
-    ];
-    candidates
-        .into_iter()
-        .find(|path| path.is_file())
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "Bundled Moondream2 model is missing"))
-}
-
 fn summon_daemon(app: &tauri::AppHandle) {
     app.state::<AppState>().screen_aware.set_monitoring_active(true);
     if let Some(window) = app.get_webview_window(DAEMON_WINDOW) {
@@ -65,15 +46,15 @@ pub fn run() {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
             let database_path = data_dir.join("daemon.sqlite3");
-            let model_archive_path = bundled_model_path(app)?;
             let state = AppState::new(
                 &database_path,
-                model_archive_path,
+                data_dir.join("moondream-0_5b-int4.mf.gz"),
                 data_dir.join("moondream2"),
             )
                 .map_err(|error| std::io::Error::other(error.to_string()))?;
             app.manage(state);
             let state = app.state::<AppState>();
+            let screen_aware = state.screen_aware.clone();
             let settings = state
                 .storage
                 .lock()
@@ -93,6 +74,34 @@ pub fn run() {
                 .inner_size(100.0, 100.0)
                 .min_inner_size(1.0, 1.0)
                 .build()?;
+            let download_needed = screen_aware.needs_model_download();
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if !download_needed {
+                    return;
+                }
+                let _ = app_handle.emit_to(
+                    DAEMON_WINDOW,
+                    events::SCREEN_AWARE_STATUS,
+                    screen_aware::ScreenAwareStatusPayload {
+                        status: "model-downloading".to_string(),
+                        message: "Downloading local Screen Aware model…".to_string(),
+                    },
+                );
+                let status = if screen_aware.prepare_model().await.is_ok() {
+                    ("model-ready", "Local Screen Aware model is ready.")
+                } else {
+                    ("error", "Couldn’t download the local Screen Aware model.")
+                };
+                let _ = app_handle.emit_to(
+                    DAEMON_WINDOW,
+                    events::SCREEN_AWARE_STATUS,
+                    screen_aware::ScreenAwareStatusPayload {
+                        status: status.0.to_string(),
+                        message: status.1.to_string(),
+                    },
+                );
+            });
             let summon = MenuItemBuilder::with_id("daemon_summon", "Summon daemon").build(app)?;
             let dismiss = MenuItemBuilder::with_id("daemon_dismiss", "Dismiss").build(app)?;
             let quit = MenuItemBuilder::with_id("daemon_quit", "Quit").build(app)?;
@@ -148,6 +157,7 @@ pub fn run() {
             commands::delete_provider,
             commands::undo_note,
             commands::get_screen_aware_settings,
+            commands::get_screen_aware_model_status,
             commands::save_screen_aware_settings,
             commands::claim_startup_welcome,
             commands::startup_welcome_pending,

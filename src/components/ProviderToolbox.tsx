@@ -5,6 +5,7 @@ import {
   listProviders,
   saveProvider,
   getScreenAwareSettings,
+  getScreenAwareModelStatus,
   captureScreenObservation,
   saveScreenAwareSettings,
   selectProvider,
@@ -38,6 +39,13 @@ const intervalModeFor = (seconds: number | null): IntervalMode => {
     : "custom";
 };
 
+const errorMessage = (error: unknown, fallback: string) =>
+  typeof error === "string"
+    ? error
+    : error instanceof Error
+      ? error.message
+      : fallback;
+
 function ProviderToolbox({ section, onClose }: ProviderToolboxProps) {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [form, setForm] = useState(EMPTY_PROVIDER);
@@ -50,6 +58,7 @@ function ProviderToolbox({ section, onClose }: ProviderToolboxProps) {
   const [intervalMode, setIntervalMode] = useState<IntervalMode>("disabled");
   const [customInterval, setCustomInterval] = useState("");
   const [screenMessage, setScreenMessage] = useState("");
+  const [isModelDownloading, setIsModelDownloading] = useState(false);
 
   const refresh = async () => {
     try {
@@ -68,12 +77,24 @@ function ProviderToolbox({ section, onClose }: ProviderToolboxProps) {
         setCustomInterval(`${settings.interval_seconds}`);
       }
     }).catch(() => setScreenMessage("Couldn’t load Screen Aware settings."));
+    void getScreenAwareModelStatus().then(setIsModelDownloading);
   }, []);
 
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void onScreenAwareStatus((payload) => {
+      if (payload.status === "model-downloading") {
+        setIsModelDownloading(true);
+        return;
+      }
+      if (payload.status === "model-ready") {
+        setIsModelDownloading(false);
+        return;
+      }
+      if (payload.status === "error") {
+        setIsModelDownloading(false);
+      }
       setScreenMessage(payload.message);
     }).then((cleanup) => {
       if (disposed) {
@@ -151,10 +172,13 @@ function ProviderToolbox({ section, onClose }: ProviderToolboxProps) {
   };
 
   const captureScreenNow = async () => {
+    if (isModelDownloading) {
+      return;
+    }
     try {
       await captureScreenObservation();
     } catch (error) {
-      setScreenMessage(error instanceof Error ? error.message : "Couldn’t capture the screen.");
+      setScreenMessage(errorMessage(error, "Couldn’t capture the screen."));
     }
   };
 
@@ -194,13 +218,14 @@ function ProviderToolbox({ section, onClose }: ProviderToolboxProps) {
             <input type="password" value={form.apiKey} onChange={(event) => setForm({ ...form, apiKey: event.target.value })} placeholder="API key" />
             <button type="submit">{editingId ? "Update provider" : "Save provider"}</button>
           </form>
-          <details className="screen-aware-settings">
+          <details className={`screen-aware-settings ${isModelDownloading ? "is-downloading" : ""}`}>
             <summary>Screen Aware(Beta)</summary>
             <p>Screenshot is not saved and its processed locally. Processing may take time depending on your device.</p>
+            {isModelDownloading && <p className="screen-aware-download-status">Downloading local model…</p>}
             <form className="screen-aware-form" onSubmit={saveScreenAware}>
               <label>
                 Screenshot interval
-                <select value={intervalMode} onChange={(event) => setIntervalMode(event.target.value as IntervalMode)}>
+                <select disabled={isModelDownloading} value={intervalMode} onChange={(event) => setIntervalMode(event.target.value as IntervalMode)}>
                   <option value="30">30 seconds</option>
                   <option value="60">60 seconds</option>
                   <option value="120">120 seconds</option>
@@ -212,6 +237,7 @@ function ProviderToolbox({ section, onClose }: ProviderToolboxProps) {
                 <label>
                   Custom seconds
                   <input
+                    disabled={isModelDownloading}
                     min="1"
                     inputMode="numeric"
                     type="number"
@@ -221,8 +247,8 @@ function ProviderToolbox({ section, onClose }: ProviderToolboxProps) {
                 </label>
               )}
               <div className="screen-aware-actions">
-                <button type="submit">Save Screen Aware</button>
-                <button type="button" onClick={() => void captureScreenNow()}>
+                <button disabled={isModelDownloading} type="submit">Save Screen Aware</button>
+                <button disabled={isModelDownloading} type="button" onClick={() => void captureScreenNow()}>
                   Capture now
                 </button>
               </div>

@@ -145,6 +145,9 @@ export const undoNote = (noteId: string) =>
 export const getScreenAwareSettings = () =>
   invoke<ScreenAwareSettings>("get_screen_aware_settings");
 
+export const getScreenAwareModelStatus = () =>
+  invoke<boolean>("get_screen_aware_model_status");
+
 export const saveScreenAwareSettings = (settings: ScreenAwareSettings) =>
   invoke<ScreenAwareSettings>("save_screen_aware_settings", {
     request: {

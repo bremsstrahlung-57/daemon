@@ -485,6 +485,15 @@ button {
     line-height: 1.4;
 }
 
+.screen-aware-settings.is-downloading > :not(summary) {
+    opacity: 0.55;
+}
+
+.screen-aware-download-status {
+    color: rgba(247, 244, 235, 0.58) !important;
+    font-size: 9px !important;
+}
+
 .screen-aware-form {
     display: grid;
     gap: 8px;

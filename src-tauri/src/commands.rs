@@ -117,6 +117,11 @@ pub fn get_screen_aware_settings(
 }
 
 #[tauri::command]
+pub fn get_screen_aware_model_status(state: State<'_, AppState>) -> bool {
+    state.screen_aware.is_model_downloading()
+}
+
+#[tauri::command]
 pub fn save_screen_aware_settings(
     app: AppHandle,
     state: State<'_, AppState>,

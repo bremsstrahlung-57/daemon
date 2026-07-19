@@ -25,4 +25,4 @@ dist-ssr
 
 .env
 PLAN.md
-model/*.bin
+model/

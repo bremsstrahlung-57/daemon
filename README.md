@@ -24,7 +24,7 @@ Daemon is a Windows desktop companion built with Tauri and React. It keeps local
 ## Models and Providers
 
 - **Conversation provider:** Daemon sends OpenAI-compatible chat-completions requests to the configured provider.
-- **Local screen model:** Screen Aware uses the bundled 4-bit `moondream-0_5b-int4.bin` Moondream2 archive. Rust extracts the ONNX model assets into Daemon's app-data directory, loads them through ONNX Runtime, and reuses the loaded runtime for subsequent captures. Moondream2 is licensed under Apache 2.0.
+- **Local screen model:** On first launch, Screen Aware downloads the pinned 4-bit Moondream2 archive into Daemon's app-data directory, verifies its SHA-256 checksum, and extracts the ONNX assets locally. Rust reuses the loaded ONNX Runtime for subsequent captures. Moondream2 is licensed under Apache 2.0.
 
 ## Features
 
@@ -32,7 +32,7 @@ Daemon is a Windows desktop companion built with Tauri and React. It keeps local
 - Automatic note creation for note-worthy messages, duplicate detection, a short-lived Undo receipt, soft deletion, and matching audit events.
 - Durable user memories, plus tool-based note and memory search when the user asks for saved context.
 - Brief happy or not-happy mascot reactions for clearly positive or negative messages. This is a presentation reaction, not persistent mood tracking.
-- Screen Aware: configurable automatic interval capture, toolbox capture, and explicit “look at my screen” requests. Screenshots are captured and processed in memory by the bundled local Moondream2 runtime, then discarded; only concise text descriptions are written to SQLite. Automatic capture pauses while Daemon is dismissed.
+- Screen Aware: configurable automatic interval capture, toolbox capture, and explicit “look at my screen” requests. Screenshots are captured and processed in memory by the local Moondream2 runtime, then discarded; only concise text descriptions are written to SQLite. Automatic capture pauses while Daemon is dismissed.
 - A transparent, draggable mascot window with tray controls, Settings, and event-driven completion receipts.
 
 ## What We Tried and Cut
@@ -56,7 +56,7 @@ bun install
 bun run tauri dev
 ```
 
-The repository bundles the required Screen Aware model at `model/moondream-0_5b-int4.bin`; do not remove it. Tauri packages that file as an application resource, and the Rust host requires it at startup.
+The Screen Aware model is downloaded once at first launch from the pinned Moondream2 release and stored in Daemon's app-data directory. The app verifies the downloaded archive before using it; after that first download, Screen Aware works offline.
 
 When the app opens, use **Settings** in the toolbox to add or select a provider. For the configuration used in this project, enter:
 
@@ -77,7 +77,7 @@ The implementation that makes this submission work was committed during **2026-0
 
 ## Third-party Licensing and Services
 
-- **Moondream2:** Apache License 2.0. The project bundles the 4-bit Moondream2 model archive for local Screen Aware inference.
+- **Moondream2:** Apache License 2.0. The project downloads the pinned 4-bit Moondream2 model archive once for local Screen Aware inference.
 - **Application dependencies:** Tauri, React, ONNX Runtime bindings, SQLite bindings, and the other Rust and JavaScript dependencies are listed in `src-tauri/Cargo.toml` and `package.json`.
 
 ## How We Used Codex and GPT-5.6

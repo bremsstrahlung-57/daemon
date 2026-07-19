@@ -5,13 +5,15 @@ use crate::{
     state::AppState,
     storage::ScreenObservationRecord,
 };
+use flate2::read::GzDecoder;
 use half::f16;
 use image::{imageops, imageops::FilterType, RgbaImage};
 use ort::{session::Session, value::Tensor};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File},
-    io::copy,
+    io::{copy, Cursor, Read},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -22,6 +24,7 @@ use std::{
 use tar::Archive;
 use tauri::{AppHandle, Emitter, Manager};
 use tokenizers::Tokenizer;
+use tokio::io::AsyncWriteExt;
 use xcap::Monitor;
 
 const MODEL_ASSETS: &[&str] = &[
@@ -33,6 +36,16 @@ const MODEL_ASSETS: &[&str] = &[
     "onnx/slim/vision_encoder.onnx",
     "onnx/slim/vision_projection.onnx",
 ];
+const MOONDREAM_FILES: &[(&str, &str)] = &[
+    ("config.json", "onnx/in/config.json"),
+    ("initial_kv_cache.npy", "onnx/in/initial_kv_caches.npy"),
+    ("tokenizer.json", "onnx/in/tokenizer.json"),
+    ("text_decoder.onnx", "onnx/slim/text_decoder_0.onnx"),
+    ("text_encoder.onnx", "onnx/slim/text_encoder.onnx"),
+    ("vision_encoder.onnx", "onnx/slim/vision_encoder.onnx"),
+    ("vision_projection.onnx", "onnx/slim/vision_projection.onnx"),
+];
+const MODEL_CACHE_VERSION: &str = "moondream-0_5b-int4-mf-v1";
 const IMAGE_SIZE: usize = 378;
 const IMAGE_TOKENS: usize = 729;
 const IMAGE_GRID_SIZE: usize = 27;
@@ -45,6 +58,9 @@ const CAPTION_PROMPT: [i64; 5] = [198, 198, 24_334, 1_159, 25];
 const MAX_GENERATED_TOKENS: usize = 128;
 const MAX_DESCRIPTION_CHARS: usize = 600;
 const MAX_INTERVAL_SECONDS: i64 = 86_400;
+const MODEL_DOWNLOAD_URL: &str = "https://huggingface.co/vikhyatk/moondream2/resolve/c22fc41f187a6ecd78a06884b7c312fa7a1d6312/moondream-0_5b-int4.mf.gz";
+const MODEL_ARCHIVE_SHA256: &str = "56cb6c2b5ff43ec065cad89da8007224d37b1b10d053ff6d958f97baa195c129";
+const MODEL_DOWNLOADING_MESSAGE: &str = "The local Screen Aware model is downloading";
 
 #[derive(Clone)]
 pub struct ScreenAwareService {
@@ -54,6 +70,7 @@ pub struct ScreenAwareService {
     capture_in_progress: Arc<AtomicBool>,
     monitoring_active: Arc<AtomicBool>,
     monitor_generation: Arc<AtomicU64>,
+    model_download_in_progress: Arc<AtomicBool>,
 }
 
 struct MoondreamRuntime {
@@ -86,12 +103,34 @@ impl ScreenAwareService {
             capture_in_progress: Arc::new(AtomicBool::new(false)),
             monitoring_active: Arc::new(AtomicBool::new(true)),
             monitor_generation: Arc::new(AtomicU64::new(0)),
+            model_download_in_progress: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub async fn prepare_model(&self) -> Result<(), String> {
+        if model_assets_ready(&self.cache_dir) || self.archive_path.is_file() {
+            return Ok(());
+        }
+        if self
+            .model_download_in_progress
+            .swap(true, Ordering::AcqRel)
+        {
+            return Err(MODEL_DOWNLOADING_MESSAGE.to_string());
+        }
+
+        let result = download_model_archive(&self.archive_path).await;
+        self.model_download_in_progress.store(false, Ordering::Release);
+        result
     }
 
     pub async fn capture_description(&self) -> Result<String, String> {
         if self.capture_in_progress.swap(true, Ordering::AcqRel) {
             return Err("Screen capture is already running".to_string());
+        }
+
+        if let Err(error) = self.prepare_model().await {
+            self.capture_in_progress.store(false, Ordering::Release);
+            return Err(error);
         }
 
         let archive_path = self.archive_path.clone();
@@ -122,6 +161,14 @@ impl ScreenAwareService {
 
     pub fn is_capturing(&self) -> bool {
         self.capture_in_progress.load(Ordering::Acquire)
+    }
+
+    pub fn is_model_downloading(&self) -> bool {
+        self.model_download_in_progress.load(Ordering::Acquire)
+    }
+
+    pub fn needs_model_download(&self) -> bool {
+        !model_assets_ready(&self.cache_dir) && !self.archive_path.is_file()
     }
 
     pub fn set_monitoring_active(&self, active: bool) {
@@ -294,7 +341,7 @@ impl MoondreamRuntime {
             .text_encoder
             .run(inputs)
             .map_err(|error| error.to_string())?;
-        Ok(output["inputs_embeds"]
+        Ok(output["input_embeds"]
             .try_extract_tensor::<f16>()
             .map_err(|error| error.to_string())?
             .iter()
@@ -310,7 +357,7 @@ impl MoondreamRuntime {
         cache_shape: Vec<usize>,
     ) -> Result<DecoderOutput, String> {
         let inputs = ort::inputs! {
-                "inputs_embeds" => Tensor::from_array(([1usize, sequence_len, TEXT_HIDDEN_SIZE], embeds.into_boxed_slice()))?,
+                "input_embeds" => Tensor::from_array(([1usize, sequence_len, TEXT_HIDDEN_SIZE], embeds.into_boxed_slice()))?,
                 "kv_cache" => Tensor::from_array((cache_shape.clone(), cache.clone().into_boxed_slice()))?,
             }
             .map_err(|error| error.to_string())?;
@@ -318,7 +365,7 @@ impl MoondreamRuntime {
             .text_decoder
             .run(inputs)
             .map_err(|error| error.to_string())?;
-        let logits = output["output"]
+        let logits = output["logits"]
             .try_extract_tensor::<f16>()
             .map_err(|error| error.to_string())?;
         let logits = logits
@@ -359,6 +406,10 @@ pub async fn capture_and_store(
     if source == "automatic" && !state.screen_aware.is_monitoring_active() {
         return Err("Screen Aware is paused while Daemon is dismissed".to_string());
     }
+    if state.screen_aware.is_model_downloading() {
+        emit_status(app, "model-downloading", MODEL_DOWNLOADING_MESSAGE);
+        return Err(MODEL_DOWNLOADING_MESSAGE.to_string());
+    }
     emit_status(app, "capturing", "Capturing screen locally…");
     let result: Result<ScreenObservationRecord, String> = async {
         let description = state.screen_aware.capture_description().await?;
@@ -380,6 +431,9 @@ pub async fn capture_and_store(
     .await;
     match &result {
         Ok(_) => emit_status(app, "ready", "Screen description saved."),
+        Err(error) if error == MODEL_DOWNLOADING_MESSAGE => {
+            emit_status(app, "model-downloading", error)
+        }
         Err(error) => emit_status(app, "error", error),
     }
     result
@@ -587,18 +641,35 @@ fn argmax(values: &[f16]) -> usize {
 }
 
 fn extract_model_assets(archive_path: &Path, cache_dir: &Path) -> Result<(), String> {
-    if MODEL_ASSETS
-        .iter()
-        .all(|asset| cache_dir.join(asset).is_file())
-    {
+    if model_assets_ready(cache_dir) {
         return Ok(());
     }
     if !archive_path.is_file() {
-        return Err("The bundled local Moondream2 model is missing".to_string());
+        return Err("The local Moondream2 model is missing".to_string());
     }
 
     fs::create_dir_all(cache_dir).map_err(|error| error.to_string())?;
-    let mut archive = Archive::new(File::open(archive_path).map_err(|error| error.to_string())?);
+    let archive_file = File::open(archive_path).map_err(|error| error.to_string())?;
+    let mut reader: Box<dyn Read> = if archive_path.extension().is_some_and(|extension| extension == "gz") {
+        Box::new(GzDecoder::new(archive_file))
+    } else {
+        Box::new(archive_file)
+    };
+    let mut magic = [0_u8; 4];
+    reader
+        .read_exact(&mut magic)
+        .map_err(|error| error.to_string())?;
+    if magic == *b"MOON" {
+        // fixed: Moondream's .mf.gz download is a MOON container, not a TAR archive.
+        extract_moondream_container(&mut reader, cache_dir)?;
+    } else {
+        extract_tar_container(Cursor::new(magic).chain(reader), cache_dir)?;
+    }
+    finish_model_extraction(cache_dir)
+}
+
+fn extract_tar_container(reader: impl Read, cache_dir: &Path) -> Result<(), String> {
+    let mut archive = Archive::new(reader);
     for entry in archive.entries().map_err(|error| error.to_string())? {
         let mut entry = entry.map_err(|error| error.to_string())?;
         let path = entry
@@ -620,14 +691,158 @@ fn extract_model_assets(archive_path: &Path, cache_dir: &Path) -> Result<(), Str
         )
         .map_err(|error| error.to_string())?;
     }
-    if MODEL_ASSETS
+    Ok(())
+}
+
+fn extract_moondream_container(reader: &mut dyn Read, cache_dir: &Path) -> Result<(), String> {
+    let mut version = [0_u8; 4];
+    reader
+        .read_exact(&mut version)
+        .map_err(|error| error.to_string())?;
+    if u32::from_le_bytes(version) != 1 {
+        return Err("The local Moondream2 model format is unsupported".to_string());
+    }
+
+    let first_name_length = read_moondream_byte(reader)? as usize;
+    extract_moondream_entry(reader, first_name_length, cache_dir)?;
+
+    loop {
+        let Some(name_length) = read_optional_moondream_u32(reader)? else {
+            break;
+        };
+        extract_moondream_entry(reader, name_length as usize, cache_dir)?;
+    }
+    Ok(())
+}
+
+fn read_moondream_byte(reader: &mut dyn Read) -> Result<u8, String> {
+    let mut byte = [0_u8; 1];
+    reader
+        .read_exact(&mut byte)
+        .map_err(|error| error.to_string())?;
+    Ok(byte[0])
+}
+
+fn read_optional_moondream_u32(reader: &mut dyn Read) -> Result<Option<u32>, String> {
+    let mut bytes = [0_u8; 4];
+    let bytes_read = reader.read(&mut bytes).map_err(|error| error.to_string())?;
+    if bytes_read == 0 {
+        return Ok(None);
+    }
+    reader
+        .read_exact(&mut bytes[bytes_read..])
+        .map_err(|error| error.to_string())?;
+    Ok(Some(u32::from_be_bytes(bytes)))
+}
+
+fn extract_moondream_entry(
+    reader: &mut dyn Read,
+    name_length: usize,
+    cache_dir: &Path,
+) -> Result<(), String> {
+    if name_length == 0 || name_length > 255 {
+        return Err("The local Moondream2 model contains an invalid asset name".to_string());
+    }
+    let mut name = vec![0_u8; name_length];
+    reader
+        .read_exact(&mut name)
+        .map_err(|error| error.to_string())?;
+    let name = std::str::from_utf8(&name)
+        .map_err(|error| error.to_string())?;
+    let mut size = [0_u8; 8];
+    reader
+        .read_exact(&mut size)
+        .map_err(|error| error.to_string())?;
+    let size = u64::from_be_bytes(size);
+    let mut contents = reader.take(size);
+    let copied = match MOONDREAM_FILES
+        .iter()
+        .find_map(|(source, destination)| (*source == name).then_some(*destination))
+    {
+        Some(destination) => {
+            let output = cache_dir.join(destination);
+            if let Some(parent) = output.parent() {
+                fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            }
+            copy(
+                &mut contents,
+                &mut File::create(output).map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())?
+        }
+        None => copy(&mut contents, &mut std::io::sink()).map_err(|error| error.to_string())?,
+    };
+    if copied != size {
+        return Err("The local Moondream2 model is incomplete".to_string());
+    }
+    Ok(())
+}
+
+fn finish_model_extraction(cache_dir: &Path) -> Result<(), String> {
+    if !model_assets_present(cache_dir) {
+        return Err("The local Moondream2 model is incomplete".to_string());
+    }
+    fs::write(cache_dir.join(".model-version"), MODEL_CACHE_VERSION)
+        .map_err(|error| error.to_string())
+}
+
+fn model_assets_ready(cache_dir: &Path) -> bool {
+    fs::read_to_string(cache_dir.join(".model-version"))
+        .is_ok_and(|version| version == MODEL_CACHE_VERSION)
+        && model_assets_present(cache_dir)
+}
+
+fn model_assets_present(cache_dir: &Path) -> bool {
+    MODEL_ASSETS
         .iter()
         .all(|asset| cache_dir.join(asset).is_file())
+}
+
+async fn download_model_archive(archive_path: &Path) -> Result<(), String> {
+    let parent = archive_path
+        .parent()
+        .ok_or_else(|| "The local model directory is unavailable".to_string())?;
+    tokio::fs::create_dir_all(parent)
+        .await
+        .map_err(|error| error.to_string())?;
+    let temporary_path = archive_path.with_extension("part");
+    let _ = tokio::fs::remove_file(&temporary_path).await;
+
+    let mut response = reqwest::Client::new()
+        .get(MODEL_DOWNLOAD_URL)
+        .send()
+        .await
+        .map_err(|error| format!("Unable to download the local Screen Aware model: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("Unable to download the local Screen Aware model: {error}"))?;
+    let mut output = tokio::fs::File::create(&temporary_path)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut hasher = Sha256::new();
+
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| format!("Unable to download the local Screen Aware model: {error}"))?
     {
-        Ok(())
-    } else {
-        Err("The bundled local Moondream2 model is incomplete".to_string())
+        hasher.update(&chunk);
+        output
+            .write_all(&chunk)
+            .await
+            .map_err(|error| error.to_string())?;
     }
+    output.flush().await.map_err(|error| error.to_string())?;
+    output.sync_all().await.map_err(|error| error.to_string())?;
+    drop(output);
+
+    let actual_hash = format!("{:x}", hasher.finalize());
+    if actual_hash != MODEL_ARCHIVE_SHA256 {
+        let _ = tokio::fs::remove_file(&temporary_path).await;
+        return Err("Downloaded local Screen Aware model failed verification".to_string());
+    }
+    tokio::fs::rename(&temporary_path, archive_path)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 fn load_initial_cache(path: &Path) -> Result<Vec<f16>, String> {
@@ -649,11 +864,15 @@ fn load_initial_cache(path: &Path) -> Result<Vec<f16>, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_cache, prepare_crops, validate_settings, MoondreamRuntime, ScreenAwareService,
+        append_cache, extract_model_assets, prepare_crops, validate_settings, MoondreamRuntime,
+        ScreenAwareService, MODEL_ASSETS, MOONDREAM_FILES,
     };
+    use flate2::{write::GzEncoder, Compression};
     use half::f16;
     use image::RgbaImage;
-    use std::path::PathBuf;
+    use std::{fs, io::{Cursor, Write}, path::PathBuf};
+    use tar::{Builder, Header};
+    use uuid::Uuid;
 
     #[test]
     fn screen_aware_settings_reject_invalid_values() {
@@ -697,20 +916,93 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires the bundled 4-bit Moondream2 model"]
-    fn bundled_model_generates_a_local_description() {
-        let project = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("project directory should exist")
-            .to_path_buf();
+    fn extracts_a_compressed_model_archive() {
+        let root = std::env::temp_dir().join(format!("daemon-model-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("temporary directory should be created");
+        let archive_path = root.join("moondream.mf.gz");
+        let file = fs::File::create(&archive_path).expect("archive should be created");
+        let encoder = GzEncoder::new(file, Compression::default());
+        let mut archive = Builder::new(encoder);
+        for asset in MODEL_ASSETS {
+            let data = b"model asset";
+            let mut header = Header::new_gnu();
+            header.set_size(data.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            archive
+                .append_data(&mut header, asset, Cursor::new(data))
+                .expect("model asset should be added");
+        }
+        archive
+            .into_inner()
+            .expect("archive should finish")
+            .finish()
+            .expect("compressed archive should finish");
+
+        let cache_dir = root.join("cache");
+        extract_model_assets(&archive_path, &cache_dir).expect("archive should extract");
+        assert!(MODEL_ASSETS
+            .iter()
+            .all(|asset| cache_dir.join(asset).is_file()));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn extracts_a_moondream_model_container() {
+        let root = std::env::temp_dir().join(format!("daemon-model-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("temporary directory should be created");
+        let archive_path = root.join("moondream.mf.gz");
+        let file = fs::File::create(&archive_path).expect("archive should be created");
+        let mut encoder = GzEncoder::new(file, Compression::default());
+        encoder.write_all(b"MOON").expect("magic should be written");
+        encoder
+            .write_all(&1_u32.to_le_bytes())
+            .expect("version should be written");
+        for (index, (source, _)) in MOONDREAM_FILES.iter().enumerate() {
+            let data = b"model asset";
+            if index == 0 {
+                encoder
+                    .write_all(&[source.len() as u8])
+                    .expect("first name length should be written");
+            } else {
+                encoder
+                    .write_all(&(source.len() as u32).to_be_bytes())
+                    .expect("name length should be written");
+            }
+            encoder
+                .write_all(source.as_bytes())
+                .expect("name should be written");
+            encoder
+                .write_all(&(data.len() as u64).to_be_bytes())
+                .expect("data length should be written");
+            encoder.write_all(data).expect("data should be written");
+        }
+        encoder.finish().expect("compressed container should finish");
+
+        let cache_dir = root.join("cache");
+        extract_model_assets(&archive_path, &cache_dir).expect("container should extract");
+        assert!(MODEL_ASSETS
+            .iter()
+            .all(|asset| cache_dir.join(asset).is_file()));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[ignore = "requires DAEMON_MOONDREAM_ARCHIVE to point to the downloaded 4-bit Moondream2 model"]
+    fn downloaded_model_generates_a_local_description() {
+        let archive_path = std::env::var_os("DAEMON_MOONDREAM_ARCHIVE")
+            .map(PathBuf::from)
+            .expect("DAEMON_MOONDREAM_ARCHIVE should be set");
         let runtime = MoondreamRuntime::load(
-            &project.join("model/moondream-0_5b-int4.bin"),
-            &project.join("src-tauri/target/moondream-screen-aware-test"),
+            &archive_path,
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/moondream-screen-aware-test"),
         )
-        .expect("bundled model should load");
+        .expect("downloaded model should load");
         let description = runtime
             .describe(&RgbaImage::new(64, 64))
-            .expect("bundled model should describe an image");
+            .expect("downloaded model should describe an image");
         assert!(!description.is_empty());
     }
 }

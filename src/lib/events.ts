@@ -14,7 +14,7 @@ export type JobLifecyclePayload = { job: JobRecord };
 export type NoteCreatedPayload = { id: string; content: string };
 export type MascotReactionPayload = { reaction: "happy" | "not_happy" };
 export type ScreenAwareStatusPayload = {
-  status: "capturing" | "ready" | "error";
+  status: "capturing" | "ready" | "error" | "model-downloading" | "model-ready";
   message: string;
 };
 
