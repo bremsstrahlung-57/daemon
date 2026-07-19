@@ -23,6 +23,7 @@ const LABELS: Record<MascotState, string> = {
   failed: "Daemon could not complete the task",
   happy: "Daemon is happy",
   not_happy: "Daemon is not happy",
+  startup: "Daemon is waiting to introduce itself",
 };
 
 function Mascot({ state, isVisible }: MascotProps) {

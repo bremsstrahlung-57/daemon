@@ -16,7 +16,8 @@ export type MascotState =
   | "completed"
   | "failed"
   | "happy"
-  | "not_happy";
+  | "not_happy"
+  | "startup";
 
 type MascotFrame = {
   animation: MascotAnimationName;
@@ -39,6 +40,7 @@ const stateAnimation: Record<MascotState, MascotAnimationName> = {
   failed: "failed",
   happy: "completed",
   not_happy: "failed",
+  startup: "working",
 };
 
 const prefersReducedMotion = () =>

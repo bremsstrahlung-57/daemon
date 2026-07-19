@@ -166,6 +166,10 @@ impl Storage {
                  capture_trigger TEXT NOT NULL CHECK (capture_trigger IN ('single', 'double')),
                  updated_at INTEGER NOT NULL
              );
+             CREATE TABLE IF NOT EXISTS startup_state (
+                 id INTEGER PRIMARY KEY CHECK (id = 1),
+                 startup_played INTEGER NOT NULL DEFAULT 0 CHECK (startup_played IN (0, 1))
+             );
              CREATE TABLE IF NOT EXISTS proposals (
                  id TEXT PRIMARY KEY,
                  conversation_id TEXT NOT NULL REFERENCES conversations(id),
@@ -214,7 +218,8 @@ impl Storage {
              CREATE INDEX IF NOT EXISTS screen_observations_timestamp_idx ON screen_observations(timestamp);
              CREATE INDEX IF NOT EXISTS proposals_status_idx ON proposals(status, created_at);
              CREATE INDEX IF NOT EXISTS jobs_status_idx ON jobs(status, completed_at);
-             CREATE INDEX IF NOT EXISTS audit_entity_idx ON audit_events(entity_type, entity_id, created_at);",
+             CREATE INDEX IF NOT EXISTS audit_entity_idx ON audit_events(entity_type, entity_id, created_at);
+             INSERT OR IGNORE INTO startup_state (id, startup_played) VALUES (1, 0);",
         )
     }
 
@@ -406,6 +411,24 @@ impl Storage {
             ],
         )?;
         Ok(settings)
+    }
+
+    pub fn claim_startup_welcome(&self) -> SqlResult<bool> {
+        Ok(self.connection.execute(
+            "UPDATE startup_state
+             SET startup_played = 1
+             WHERE id = 1 AND startup_played = 0",
+            [],
+        )? == 1)
+    }
+
+    pub fn startup_welcome_pending(&self) -> SqlResult<bool> {
+        let startup_played = self.connection.query_row(
+            "SELECT startup_played FROM startup_state WHERE id = 1",
+            [],
+            |row| row.get::<_, i64>(0),
+        )?;
+        Ok(startup_played == 0)
     }
 
     pub fn insert_screen_observation(
@@ -1237,6 +1260,41 @@ mod tests {
         assert_eq!(recent[0].source, "automatic");
         assert_eq!(observation.timestamp, observation.created_at);
         assert!(!schema.to_ascii_lowercase().contains("blob"));
+        drop(storage);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn startup_welcome_is_claimed_once() {
+        let path = env::temp_dir().join(format!("daemon-startup-{}.sqlite3", Uuid::new_v4()));
+        let storage = Storage::open(&path).expect("temporary database should open");
+
+        assert!(storage
+            .claim_startup_welcome()
+            .expect("first startup welcome should be claimed"));
+        assert!(!storage
+            .claim_startup_welcome()
+            .expect("startup welcome should not be claimed twice"));
+
+        drop(storage);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn startup_welcome_is_pending_before_it_is_claimed() {
+        let path = env::temp_dir().join(format!("daemon-startup-{}.sqlite3", Uuid::new_v4()));
+        let storage = Storage::open(&path).expect("temporary database should open");
+
+        assert!(storage
+            .startup_welcome_pending()
+            .expect("startup welcome should initially be pending"));
+        storage
+            .claim_startup_welcome()
+            .expect("startup welcome should be claimed");
+        assert!(!storage
+            .startup_welcome_pending()
+            .expect("claimed startup welcome should no longer be pending"));
+
         drop(storage);
         let _ = fs::remove_file(path);
     }

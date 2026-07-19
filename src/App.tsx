@@ -12,7 +12,9 @@ import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import Mascot from "./components/Mascot";
 import ProviderToolbox, { type ToolboxSection } from "./components/ProviderToolbox";
 import {
+  claimStartupWelcome,
   showToolboxMenu,
+  startupWelcomePending,
   submitConversationTurn,
   undoNote,
   type JobRecord,
@@ -67,6 +69,11 @@ type ReplyContext = {
   ];
   const PROMPT = PROMPTS[Math.floor(Math.random() * PROMPTS.length)];
 const PROMPT_VISIBLE_MS = 10_000;
+const WELCOME_LINES = [
+  "Hi, I’m Daemon.",
+  "I’m a local desktop companion. I can remember notes and context so our conversations can pick up where they left off.",
+  "Set up your AI provider in Settings, and I’ll be ready to keep talking with you.",
+] as const;
 
 const visibleDuration = (text: string) => Math.max(2_000, (text.length / 18) * 1_000);
 
@@ -111,11 +118,16 @@ function App() {
   const [noteReceipt, setNoteReceipt] = useState<{ id: string; content: string } | null>(null);
   const [isUndoingNote, setIsUndoingNote] = useState(false);
   const [mascotReaction, setMascotReaction] = useState<"happy" | "not_happy" | null>(null);
+  const [isWelcome, setIsWelcome] = useState(false);
+  const [isStartupPending, setIsStartupPending] = useState(false);
+  const [welcomeStep, setWelcomeStep] = useState(0);
 
   const shellRef = useRef<HTMLElement>(null);
   const dragStartRef = useRef<{ x: number; y: number } | null>(null);
   const didDragRef = useRef(false);
   const timersRef = useRef<number[]>([]);
+  const welcomeClaimInFlightRef = useRef(false);
+  const startupInteractionStartedRef = useRef(false);
 
   const clearTimers = useCallback(() => {
     timersRef.current.forEach((timer) => window.clearTimeout(timer));
@@ -136,6 +148,18 @@ function App() {
     setTimer(() => setPhase("idle"), PROMPT_VISIBLE_MS);
   }, [clearTimers, setTimer]);
 
+  const beginWelcome = useCallback(() => {
+    clearTimers();
+    setIsRendered(true);
+    setReplyingTo(null);
+    setIsWelcome(true);
+    setIsStartupPending(false);
+    setWelcomeStep(0);
+    setLine(WELCOME_LINES[0]);
+    setMessageKey((key) => key + 1);
+    setPhase("speaking");
+  }, [clearTimers]);
+
   const resizeToContent = useCallback(() => {
     if (!shellRef.current || !canUseTauriWindow) {
       return;
@@ -153,12 +177,14 @@ function App() {
   const dismiss = useCallback(() => {
     clearTimers();
     setReplyingTo(null);
+    setIsWelcome(false);
     setPhase("idle");
   }, [clearTimers]);
 
   const beginConversation = useCallback(() => {
     clearTimers();
     setReplyingTo(null);
+    setIsWelcome(false);
     setIsRendered(true);
     setLine("I’m listening.");
     setPhase("listening");
@@ -168,6 +194,42 @@ function App() {
       setTimer(() => setPhase("idle"), PROMPT_VISIBLE_MS);
     }, 500);
   }, [clearTimers, setTimer]);
+
+  const beginFirstInteraction = useCallback(() => {
+    if (welcomeClaimInFlightRef.current) {
+      return;
+    }
+
+    startupInteractionStartedRef.current = true;
+    welcomeClaimInFlightRef.current = true;
+    void (async () => {
+      try {
+        if (await claimStartupWelcome()) {
+          beginWelcome();
+        } else {
+          setIsStartupPending(false);
+          beginConversation();
+        }
+      } catch {
+        setIsStartupPending(false);
+        beginConversation();
+      } finally {
+        welcomeClaimInFlightRef.current = false;
+      }
+    })();
+  }, [beginConversation, beginWelcome]);
+
+  const advanceWelcome = useCallback(() => {
+    const nextStep = welcomeStep + 1;
+    if (nextStep < WELCOME_LINES.length) {
+      setWelcomeStep(nextStep);
+      setLine(WELCOME_LINES[nextStep]);
+      setMessageKey((key) => key + 1);
+      return;
+    }
+
+    beginConversation();
+  }, [beginConversation, welcomeStep]);
 
   const replyToDaemon = useCallback(() => {
     clearTimers();
@@ -312,6 +374,11 @@ function App() {
   };
 
   const handleDaemonClick = () => {
+    if (isWelcome) {
+      advanceWelcome();
+      return;
+    }
+
     if (didDragRef.current) {
       didDragRef.current = false;
       return;
@@ -323,7 +390,7 @@ function App() {
     }
 
     if (phase === "idle" || phase === "sleeping" || phase === "dismissed") {
-      beginConversation();
+      beginFirstInteraction();
     }
   };
 
@@ -333,8 +400,29 @@ function App() {
     }
 
     event.preventDefault();
-    beginConversation();
+    if (isWelcome) {
+      advanceWelcome();
+      return;
+    }
+    beginFirstInteraction();
   };
+
+  useEffect(() => {
+    if (!canUseTauriWindow) {
+      return undefined;
+    }
+
+    let active = true;
+    void startupWelcomePending().then((pending) => {
+      if (active && !startupInteractionStartedRef.current) {
+        setIsStartupPending(pending);
+      }
+    }).catch(() => undefined);
+
+    return () => {
+      active = false;
+    };
+  }, [canUseTauriWindow]);
 
   useEffect(() => {
     if (phase === "idle") {
@@ -543,7 +631,9 @@ function App() {
             <Mascot
               isVisible={isRendered}
               state={
-                isDragging
+                isStartupPending
+                  ? "startup"
+                  : isDragging
                   ? "dragged"
                   : mascotReaction
                     ? mascotReaction
@@ -572,11 +662,11 @@ function App() {
                 key={messageKey}
                 type="button"
                 className="ambient-line"
-                aria-label="Reply to Daemon"
-                onClick={replyToDaemon}
+                aria-label={isWelcome ? "Continue Daemon's introduction" : "Reply to Daemon"}
+                onClick={isWelcome ? advanceWelcome : replyToDaemon}
               >
                 <span className="ambient-message-text">{line}</span>
-                <span className="reply-option">Reply ↵</span>
+                <span className="reply-option">{isWelcome ? "Click to continue" : "Reply ↵"}</span>
               </button>
             )}
 

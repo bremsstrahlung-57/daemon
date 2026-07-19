@@ -136,6 +136,26 @@ pub fn save_screen_aware_settings(
 }
 
 #[tauri::command]
+pub fn claim_startup_welcome(state: State<'_, AppState>) -> Result<bool, String> {
+    state
+        .storage
+        .lock()
+        .map_err(|_| "Local storage is unavailable".to_string())?
+        .claim_startup_welcome()
+        .map_err(|_| "Unable to load the startup welcome".to_string())
+}
+
+#[tauri::command]
+pub fn startup_welcome_pending(state: State<'_, AppState>) -> Result<bool, String> {
+    state
+        .storage
+        .lock()
+        .map_err(|_| "Local storage is unavailable".to_string())?
+        .startup_welcome_pending()
+        .map_err(|_| "Unable to load the startup welcome".to_string())
+}
+
+#[tauri::command]
 pub async fn capture_screen_observation(
     app: AppHandle,
     state: State<'_, AppState>,

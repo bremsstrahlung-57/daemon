@@ -149,6 +149,8 @@ pub fn run() {
             commands::undo_note,
             commands::get_screen_aware_settings,
             commands::save_screen_aware_settings,
+            commands::claim_startup_welcome,
+            commands::startup_welcome_pending,
             commands::capture_screen_observation,
             commands::create_model_response,
             commands::validate_tool_call,

@@ -166,7 +166,9 @@ function ProviderToolbox({ section, onClose }: ProviderToolboxProps) {
       </header>
       {section === "about" ? (
         <>
-          <p>Daemon v0.1.0 · Local companion · OpenAI-compatible chat endpoints.</p>
+          <p>Daemon v1.0.0 · Local companion · OpenAI-compatible chat endpoints.</p>
+          <p>Setup your provider and api key in settings and you are ready to go.</p>
+          <p><a href="https://moondream.ai/" target="_blank" rel="noopener">Moondream2</a></p>
         </>
       ) : (
         <>

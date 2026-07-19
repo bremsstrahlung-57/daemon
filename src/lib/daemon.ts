@@ -152,6 +152,12 @@ export const saveScreenAwareSettings = (settings: ScreenAwareSettings) =>
     },
   });
 
+export const claimStartupWelcome = () =>
+  invoke<boolean>("claim_startup_welcome");
+
+export const startupWelcomePending = () =>
+  invoke<boolean>("startup_welcome_pending");
+
 export const captureScreenObservation = () =>
   invoke<ScreenObservationRecord>("capture_screen_observation");
 
