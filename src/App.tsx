@@ -41,6 +41,11 @@ type CompanionPhase =
   | "sleeping"
   | "dismissed";
 
+type ReplyContext = {
+  user: string;
+  assistant: string;
+};
+
   const PROMPTS = [
     "What’s been on your mind?",
     "What would you like to talk about?",
@@ -99,6 +104,8 @@ function App() {
   const [isDragging, setIsDragging] = useState(false);
   const [input, setInput] = useState("");
   const [conversationId, setConversationId] = useState<string | undefined>();
+  const [replyingTo, setReplyingTo] = useState<ReplyContext | null>(null);
+  const [lastExchange, setLastExchange] = useState<ReplyContext | null>(null);
   const [isJobRunning, setIsJobRunning] = useState(false);
   const [toolboxSection, setToolboxSection] = useState<ToolboxSection | null>(null);
   const [noteReceipt, setNoteReceipt] = useState<{ id: string; content: string } | null>(null);
@@ -145,11 +152,13 @@ function App() {
 
   const dismiss = useCallback(() => {
     clearTimers();
+    setReplyingTo(null);
     setPhase("idle");
   }, [clearTimers]);
 
   const beginConversation = useCallback(() => {
     clearTimers();
+    setReplyingTo(null);
     setIsRendered(true);
     setLine("I’m listening.");
     setPhase("listening");
@@ -162,10 +171,11 @@ function App() {
 
   const replyToDaemon = useCallback(() => {
     clearTimers();
+    setReplyingTo(lastExchange?.assistant === line ? lastExchange : null);
     setLine("");
     setPhase("waiting");
     setTimer(() => setPhase("idle"), PROMPT_VISIBLE_MS);
-  }, [clearTimers, setTimer]);
+  }, [clearTimers, lastExchange, line, setTimer]);
 
   const submitMessage = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -182,8 +192,11 @@ function App() {
       const result = await submitConversationTurn({
         content,
         conversationId,
+        replyContext: replyingTo ?? undefined,
       });
       setConversationId(result.conversation_id);
+      setLastExchange({ user: content, assistant: result.assistant_text });
+      setReplyingTo(null);
     } catch (error) {
       const message = invocationErrorMessage(error);
       setLine(message);
@@ -562,7 +575,8 @@ function App() {
                 aria-label="Reply to Daemon"
                 onClick={replyToDaemon}
               >
-                {line}
+                <span className="ambient-message-text">{line}</span>
+                <span className="reply-option">Reply ↵</span>
               </button>
             )}
 
@@ -585,7 +599,14 @@ function App() {
                 <button type="button" className="dismiss-button" aria-label="Dismiss" onClick={dismiss}>
                   ×
                 </button>
-                <p className="card-prompt">{PROMPT}</p>
+                {replyingTo ? (
+                  <div className="reply-context">
+                    <span>Replying to Daemon</span>
+                    <p>{replyingTo.assistant}</p>
+                  </div>
+                ) : (
+                  <p className="card-prompt">{PROMPT}</p>
+                )}
                 <form className="message-form" onSubmit={submitMessage}>
                   <input
                     autoFocus

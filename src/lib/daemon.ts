@@ -3,6 +3,10 @@ import { invoke } from "@tauri-apps/api/core";
 export type SubmitTurnRequest = {
   content: string;
   conversationId?: string;
+  replyContext?: {
+    user: string;
+    assistant: string;
+  };
 };
 
 export type NoteRecord = {
@@ -101,6 +105,12 @@ export const submitConversationTurn = (request: SubmitTurnRequest) =>
     request: {
       content: request.content,
       conversation_id: request.conversationId,
+      reply_context: request.replyContext
+        ? {
+            user: request.replyContext.user,
+            assistant: request.replyContext.assistant,
+          }
+        : undefined,
     },
   });
 

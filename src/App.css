@@ -98,6 +98,8 @@ button {
 
 .ambient-line {
     position: relative;
+    display: grid;
+    justify-items: start;
     box-sizing: border-box;
     width: max-content;
     max-width: 300px;
@@ -121,6 +123,16 @@ button {
     backdrop-filter: blur(20px) saturate(140%);
     -webkit-backdrop-filter: blur(20px) saturate(140%);
     animation: ambient-line 4.5s ease both;
+}
+
+.reply-option {
+    margin-top: 7px;
+    padding-top: 5px;
+    color: #e4c7ff;
+    border-top: 1px solid rgba(215, 180, 255, 0.24);
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
 }
 
 .ambient-line:focus-visible {
@@ -166,6 +178,30 @@ button {
     color: rgba(205, 245, 255, 0.9);
     font-size: 12px;
     line-height: 1.35;
+}
+
+.reply-context {
+    margin: 0 28px 10px 0;
+    color: rgba(205, 245, 255, 0.9);
+}
+
+.reply-context span {
+    display: block;
+    margin-bottom: 3px;
+    color: rgba(198, 140, 255, 0.94);
+    font-size: 10px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.reply-context p {
+    display: -webkit-box;
+    margin: 0;
+    overflow: hidden;
+    font-size: 12px;
+    line-height: 1.35;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
 }
 
 .choice-list {

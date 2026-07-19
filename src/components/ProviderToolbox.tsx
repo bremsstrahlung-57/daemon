@@ -167,11 +167,10 @@ function ProviderToolbox({ section, onClose }: ProviderToolboxProps) {
       {section === "about" ? (
         <>
           <p>Daemon v0.1.0 · Local companion · OpenAI-compatible chat endpoints.</p>
-          <a href="https://platform.openai.com/docs/api-reference/chat" target="_blank" rel="noreferrer">Chat Completions reference</a>
         </>
       ) : (
         <>
-          <p className="toolbox-description">Configure the AI provider, model, and API key here. Keys stay in the OS credential manager.</p>
+          <p className="toolbox-description">Configure the AI provider, model, and API key here.</p>
           <div className="provider-list">
             {providers.map((provider) => (
               <div key={provider.id} className="provider-row">
@@ -194,8 +193,8 @@ function ProviderToolbox({ section, onClose }: ProviderToolboxProps) {
             <button type="submit">{editingId ? "Update provider" : "Save provider"}</button>
           </form>
           <details className="screen-aware-settings">
-            <summary>Screen Aware</summary>
-            <p>Uses the bundled local Moondream2 model. Screenshots stay in memory and only descriptions are saved.</p>
+            <summary>Screen Aware(Beta)</summary>
+            <p>Screenshot is not saved and its processed locally. Processing may take time depending on your device.</p>
             <form className="screen-aware-form" onSubmit={saveScreenAware}>
               <label>
                 Screenshot interval
