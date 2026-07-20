@@ -13,13 +13,13 @@ Daemon is your human like ai companion like microsoft clippy. It can remember th
 
 Daemon is a Windows desktop companion built with Tauri and React. It keeps local conversation data in SQLite, can call a small set of Rust-owned local tools, and presents its replies through a transparent mascot window.
 
-## Download and Install
+## Installation
 
-Download Daemon v1.0.0 from the [GitHub Releases page](https://github.com/bremsstrahlung-57/daemon/releases/tag/v1.0.0), or use the commands below.
+Download **Daemon v1.0.0** from its [release page](https://github.com/bremsstrahlung-57/daemon/releases/tag/v1.0.0), or install it directly below.
 
 ### Windows (64-bit)
 
-Run in PowerShell to download and start the recommended installer:
+Run in PowerShell:
 
 ```powershell
 Invoke-WebRequest "https://github.com/bremsstrahlung-57/daemon/releases/download/v1.0.0/daemon_1.0.0_x64-setup.exe" -OutFile "Daemon-setup.exe"
@@ -28,50 +28,51 @@ Start-Process ".\Daemon-setup.exe"
 
 ### macOS
 
-For Apple Silicon Macs (M1, M2, M3, or M4):
+Apple Silicon:
 
 ```bash
-curl -fL -o Daemon.dmg "https://github.com/bremsstrahlung-57/daemon/releases/download/v1.0.0/daemon_1.0.0_aarch64.dmg"
+curl -fL "https://github.com/bremsstrahlung-57/daemon/releases/download/v1.0.0/daemon_1.0.0_aarch64.dmg" -o Daemon.dmg
 open Daemon.dmg
 ```
 
-For Intel Macs:
+Intel:
 
 ```bash
-curl -fL -o Daemon.dmg "https://github.com/bremsstrahlung-57/daemon/releases/download/v1.0.0/daemon_1.0.0_x64.dmg"
+curl -fL "https://github.com/bremsstrahlung-57/daemon/releases/download/v1.0.0/daemon_1.0.0_x64.dmg" -o Daemon.dmg
 open Daemon.dmg
 ```
 
 ### Ubuntu or Debian (64-bit)
 
 ```bash
-wget https://github.com/bremsstrahlung-57/daemon/releases/download/v1.0.0/daemon_1.0.0_amd64.deb
+curl -fLO "https://github.com/bremsstrahlung-57/daemon/releases/download/v1.0.0/daemon_1.0.0_amd64.deb"
 sudo apt install ./daemon_1.0.0_amd64.deb
 ```
 
-### Fedora or RHEL (64-bit)
+### Fedora, RHEL, or openSUSE (64-bit)
+
+Download the RPM once:
 
 ```bash
-wget https://github.com/bremsstrahlung-57/daemon/releases/download/v1.0.0/daemon-1.0.0-1.x86_64.rpm
-sudo dnf install ./daemon-1.0.0-1.x86_64.rpm
+curl -fLO "https://github.com/bremsstrahlung-57/daemon/releases/download/v1.0.0/daemon-1.0.0-1.x86_64.rpm"
 ```
 
-### openSUSE (64-bit)
+Install it with your distribution's package manager:
 
 ```bash
-wget https://github.com/bremsstrahlung-57/daemon/releases/download/v1.0.0/daemon-1.0.0-1.x86_64.rpm
-sudo zypper install ./daemon-1.0.0-1.x86_64.rpm
+sudo dnf install ./daemon-1.0.0-1.x86_64.rpm     # Fedora or RHEL
+sudo zypper install ./daemon-1.0.0-1.x86_64.rpm  # openSUSE
 ```
 
 ### Other Linux distributions (64-bit)
 
 ```bash
-wget https://github.com/bremsstrahlung-57/daemon/releases/download/v1.0.0/daemon_1.0.0_amd64.AppImage
+curl -fLO "https://github.com/bremsstrahlung-57/daemon/releases/download/v1.0.0/daemon_1.0.0_amd64.AppImage"
 chmod +x daemon_1.0.0_amd64.AppImage
 ./daemon_1.0.0_amd64.AppImage
 ```
 
-For newer versions, use the [GitHub Releases page](https://github.com/bremsstrahlung-57/daemon/releases). The `.tar.gz` downloads are portable archives for manual installation.
+See [all releases](https://github.com/bremsstrahlung-57/daemon/releases) for newer versions and portable `.tar.gz` archives.
 
 ## Architecture
 
