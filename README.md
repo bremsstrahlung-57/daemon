@@ -13,6 +13,66 @@ Daemon is your human like ai companion like microsoft clippy. It can remember th
 
 Daemon is a Windows desktop companion built with Tauri and React. It keeps local conversation data in SQLite, can call a small set of Rust-owned local tools, and presents its replies through a transparent mascot window.
 
+## Download and Install
+
+Download Daemon v1.0.0 from the [GitHub Releases page](https://github.com/bremsstrahlung-57/daemon/releases/tag/v1.0.0), or use the commands below.
+
+### Windows (64-bit)
+
+Run in PowerShell to download and start the recommended installer:
+
+```powershell
+Invoke-WebRequest "https://github.com/bremsstrahlung-57/daemon/releases/download/v1.0.0/daemon_1.0.0_x64-setup.exe" -OutFile "Daemon-setup.exe"
+Start-Process ".\Daemon-setup.exe"
+```
+
+### macOS
+
+For Apple Silicon Macs (M1, M2, M3, or M4):
+
+```bash
+curl -fL -o Daemon.dmg "https://github.com/bremsstrahlung-57/daemon/releases/download/v1.0.0/daemon_1.0.0_aarch64.dmg"
+open Daemon.dmg
+```
+
+For Intel Macs:
+
+```bash
+curl -fL -o Daemon.dmg "https://github.com/bremsstrahlung-57/daemon/releases/download/v1.0.0/daemon_1.0.0_x64.dmg"
+open Daemon.dmg
+```
+
+### Ubuntu or Debian (64-bit)
+
+```bash
+wget https://github.com/bremsstrahlung-57/daemon/releases/download/v1.0.0/daemon_1.0.0_amd64.deb
+sudo apt install ./daemon_1.0.0_amd64.deb
+```
+
+### Fedora or RHEL (64-bit)
+
+```bash
+wget https://github.com/bremsstrahlung-57/daemon/releases/download/v1.0.0/daemon-1.0.0-1.x86_64.rpm
+sudo dnf install ./daemon-1.0.0-1.x86_64.rpm
+```
+
+### openSUSE (64-bit)
+
+```bash
+wget https://github.com/bremsstrahlung-57/daemon/releases/download/v1.0.0/daemon-1.0.0-1.x86_64.rpm
+sudo zypper install ./daemon-1.0.0-1.x86_64.rpm
+```
+
+### Other Linux distributions (64-bit)
+
+```bash
+wget https://github.com/bremsstrahlung-57/daemon/releases/download/v1.0.0/daemon_1.0.0_amd64.AppImage
+chmod +x daemon_1.0.0_amd64.AppImage
+./daemon_1.0.0_amd64.AppImage
+```
+
+For newer versions, use the [GitHub Releases page](https://github.com/bremsstrahlung-57/daemon/releases). The `.tar.gz` downloads are portable archives for manual installation.
+
 ## Architecture
 
 - **Desktop shell and UI:** Tauri 2 hosts a React 19 / TypeScript interface. The UI renders the mascot, prompt and reply surfaces, Settings, notes receipts, and event-driven status updates.

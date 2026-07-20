@@ -45,9 +45,13 @@ impl OpenAiClient {
         tools: Vec<ChatCompletionFunctionTool>,
     ) -> Result<ChatCompletionResponse, String> {
         let endpoint = format!("{}/chat/completions", provider.base_url.trim_end_matches('/'));
+        let api_key = self
+            .secrets
+            .load_provider_api_key(&provider.id)
+            .map_err(|_| "The selected AI provider has no saved API key. Open Settings and save the key again.".to_string())?;
         self.send_provider_completion(
             endpoint,
-            self.secrets.load_provider_api_key(&provider.id).ok(),
+            Some(api_key),
             ChatCompletionRequest {
                 model: provider.model.clone(),
                 messages,
