@@ -35,4 +35,4 @@ ort = { version = "=2.0.0-rc.9", features = ["half"] }
 ort-sys = "=2.0.0-rc.9"
 tar = "0.4"
 tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
-xcap = "0.9"
+xcap = "=0.8.1"
