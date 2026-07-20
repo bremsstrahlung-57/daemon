@@ -1,0 +1,25 @@
+<PixlyAnimation version="1.5">
+	<Info sheetWidth="192" sheetHeight="192" totalCollumns="3" totalRows="3" frameWidth="64" frameHeight="64" layerCount="1"/>
+	<Frames length="5">
+		<Frame duration="200" visible="true">
+			<Region x="0" y="0" width="64" height="64"/>
+			<Index linear="0" collumn="0" row="0"/>
+		</Frame>
+		<Frame duration="200" visible="true">
+			<Region x="64" y="0" width="64" height="64"/>
+			<Index linear="1" collumn="1" row="0"/>
+		</Frame>
+		<Frame duration="200" visible="true">
+			<Region x="128" y="0" width="64" height="64"/>
+			<Index linear="2" collumn="2" row="0"/>
+		</Frame>
+		<Frame duration="200" visible="true">
+			<Region x="0" y="64" width="64" height="64"/>
+			<Index linear="3" collumn="0" row="1"/>
+		</Frame>
+		<Frame duration="200" visible="true">
+			<Region x="64" y="64" width="64" height="64"/>
+			<Index linear="4" collumn="1" row="1"/>
+		</Frame>
+	</Frames>
+</PixlyAnimation>
