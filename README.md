@@ -1,6 +1,27 @@
-# Daemon
+<div align="center">
+  <img src="public/wizard_hat/wizard_hat_sleeping.gif" alt="Daemon mascot" width="128" />
+  <h1>Daemon</h1>
+  <p>A local-first desktop companion that remembers, helps, and stays out of the way.</p>
+  <p>
+    <a href="https://github.com/bremsstrahlung-57/daemon/releases"><img src="https://img.shields.io/github/v/release/bremsstrahlung-57/daemon?display_name=tag&style=flat-square" alt="Latest release" /></a>
+    <a href="LICENSE"><img src="https://img.shields.io/github/license/bremsstrahlung-57/daemon?style=flat-square" alt="License" /></a>
+    <img src="https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square&logo=tauri&logoColor=white" alt="Tauri 2" />
+    <img src="https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black" alt="React 19" />
+  </p>
+  <p>
+    <a href="#demo">Demo</a> ·
+    <a href="#features">Features</a> ·
+    <a href="#installation">Installation</a> ·
+    <a href="#development">Development</a> ·
+    <a href="#architecture">Architecture</a>
+  </p>
+</div>
 
-Daemon is a local-first desktop companion with a lightweight mascot interface. It can hold conversations, remember useful information, create notes, and describe what is on your screen without storing screenshots.
+Daemon can hold conversations, remember useful information, create notes, and describe what is on your screen without storing screenshots.
+
+## Demo
+
+https://github.com/user-attachments/assets/44813cde-77c4-4476-a415-e08838930ac1
 
 ## Features
 
